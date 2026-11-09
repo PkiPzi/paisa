@@ -82,11 +82,10 @@ export async function swCreateExpense(e: { cost: number; description: string; da
 }
 
 // ---------- Groq (free tier) ----------
-/** Category guess from payee, amount and time only: no account numbers leave the app. Null = no usable answer. */
-export async function guessCategory(t: { payee: string; amount: number; direction: string; at: Date }): Promise<{ category: string; confidence: number } | null> {
+/** One JSON-mode call. Null on any failure: callers fall back to asking the user. */
+async function groqJson(system: string, user: string, maxTokens: number): Promise<unknown> {
   const key = env("GROQ_API_KEY");
   if (!key) return null;
-  const time = t.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "numeric", minute: "2-digit" });
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -95,20 +94,39 @@ export async function guessCategory(t: { payee: string; amount: number; directio
         model: env("GROQ_MODEL") ?? "openai/gpt-oss-20b",
         reasoning_effort: "low",
         temperature: 0,
-        max_completion_tokens: 300,
+        max_completion_tokens: maxTokens,
         response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: `You label one bank transaction of a salaried person in India. Reply with JSON {"category": one of ${JSON.stringify(ALL)}, "confidence": 0 to 1}. A known brand or merchant earns high confidence. A payment to a private person's name or UPI id is a guess: keep confidence below 0.5.` },
-          { role: "user", content: `${t.direction} of Rs ${t.amount / 100} ${t.direction === "debit" ? "to" : "from"} "${t.payee}" on ${time}` },
-        ],
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const out = JSON.parse(json.choices?.[0]?.message?.content ?? "{}") as { category?: string; confidence?: number };
-    return out.category && ALL.includes(out.category) && typeof out.confidence === "number" ? { category: out.category, confidence: out.confidence } : null;
+    return JSON.parse(json.choices?.[0]?.message?.content ?? "null");
   } catch {
-    return null; // the bot simply asks instead
+    return null;
   }
+}
+
+const LABEL_RULES = `Categories: ${JSON.stringify(ALL)}. A known brand or merchant earns high confidence. A payment to a private person's name or UPI id is a guess: keep confidence below 0.5.`;
+type Guess = { category: string; confidence: number };
+const validGuess = (g: unknown): g is Guess =>
+  !!g && typeof (g as Guess).confidence === "number" && ALL.includes((g as Guess).category);
+
+/** Category guess from payee, amount and time only: no account numbers leave the app. Null = no usable answer. */
+export async function guessCategory(t: { payee: string; amount: number; direction: string; at: Date }): Promise<Guess | null> {
+  const time = t.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "numeric", minute: "2-digit" });
+  const out = await groqJson(
+    `You label one bank transaction of a salaried person in India. Reply with JSON {"category": string, "confidence": 0 to 1}. ${LABEL_RULES}`,
+    `${t.direction} of Rs ${t.amount / 100} ${t.direction === "debit" ? "to" : "from"} "${t.payee}" on ${time}`, 300);
+  return validGuess(out) ? out : null;
+}
+
+/** Statement import: many payees in one call. The result has the same length as the input; null where unsure. */
+export async function guessCategories(items: { payee: string; amount: number; direction: string }[]): Promise<(Guess | null)[]> {
+  const out = (await groqJson(
+    `You label bank transactions of a salaried person in India. Reply with JSON {"labels": [{"category": string, "confidence": 0 to 1}, ...]}, one entry per input line, in order. ${LABEL_RULES}`,
+    items.map((t, i) => `${i + 1}. ${t.direction} of Rs ${t.amount / 100} ${t.direction === "debit" ? "to" : "from"} "${t.payee}"`).join("\n"),
+    60 * items.length + 200)) as { labels?: unknown[] } | null;
+  return items.map((_, i) => (out?.labels?.length === items.length && validGuess(out.labels[i]) ? (out.labels[i] as Guess) : null));
 }

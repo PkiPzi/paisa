@@ -35,6 +35,16 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
    show the manifest (Project Settings), paste `apps-script/Code.gs` and `appsscript.json`, add the script
    properties `APP_URL` and `CRON_SECRET`, run `installTrigger`, then run `forwardMail` once.
 
+## Past statements and the Splitwise backfill
+1. Download the last 12 months: bank accounts as `.xls` / `.xlsx` / `.csv`, cards as statement PDFs.
+2. Dry run, and compare the printed totals with the statement:
+   `npx tsx scripts/import-statements.ts "ICICI a/c 1234" ~/Downloads/icici.xls`
+3. Store them: the same command with `--write` (needs `DATABASE_URL` in `.env.local`; set
+   `PDF_PASSWORD=...` for locked PDFs). Rows dated on or after the first live bank mail are skipped,
+   and re-running adds nothing twice.
+4. Open `/backfill`: tick the shared payments, choose a group or friend, check the dry-run preview,
+   then post. Splitwise notifies your friends for each expense, 40 at most per batch.
+
 ## Local development
 ```
 npx tsx scripts/dev-db.ts            # embedded Postgres with made-up data, no Neon needed
