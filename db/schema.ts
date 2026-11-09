@@ -1,4 +1,4 @@
-import { date, integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { date, doublePrecision, integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 
 // All money is integer paise.
 
@@ -51,4 +51,19 @@ export const bills = pgTable("bills", {
   card: text().notNull(),
   amount: integer().notNull(),
   dueDate: date().notNull(), // YYYY-MM-DD
+});
+
+/** What you own. Replaced wholesale by scripts/import-holdings.ts; prices refreshed daily. */
+export const holdings = pgTable("holdings", {
+  isin: text().primaryKey(),
+  name: text().notNull(),
+  kind: text().notNull(), // mf | stock
+  assetClass: text().notNull(), // equity | debt | hybrid | gold | other
+  category: text().notNull(), // AMFI category such as "Large Cap Fund", or "Stock"
+  symbol: text(), // Yahoo symbol for stocks, looked up once from the ISIN
+  units: doublePrecision().notNull(),
+  invested: integer().notNull(), // paise
+  price: doublePrecision(), // rupees per unit; null until the first refresh
+  priceAt: text(),
+  importedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });

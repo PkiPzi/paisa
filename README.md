@@ -45,6 +45,18 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
 4. Open `/backfill`: tick the shared payments, choose a group or friend, check the dry-run preview,
    then post. Splitwise notifies your friends for each expense, 40 at most per batch.
 
+## Investments
+1. Export your holdings from Groww (mutual funds and stocks), or write a CSV with the header
+   `isin,name,units,invested`.
+2. `npx tsx scripts/import-holdings.ts <files...>` prints what it read; add `--write` to store it.
+   An import replaces the stored funds and/or shares, so re-run it after buying or selling.
+3. Prices refresh every morning: funds from AMFI's NAV file, shares from Yahoo Finance (unofficial).
+4. `/invest` shows value, gain, the equity/debt spread and the nudges. The Sunday digest carries the
+   top two nudges, and on the 1st the bot sends a monthly review written by Groq from your numbers.
+
+Nudges are fixed rules, not predictions: surplus income not invested, equity share 10 points off
+`TARGET_EQUITY_PCT`, two funds in one category, a Regular plan, one share above 15%, a stale import.
+
 ## Local development
 ```
 npx tsx scripts/dev-db.ts            # embedded Postgres with made-up data, no Neon needed

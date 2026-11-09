@@ -69,7 +69,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <strong>{monthName(m)}</strong>
           {isCurrent ? <span aria-hidden className="off">›</span> : <Link href={`/?m=${shift(m, 1)}`} aria-label="Next month">›</Link>}
         </nav>
-        <div className="links"><Link className="link" href="/backfill">Past splits</Link><form action={logout}><button className="link">Sign out</button></form></div>
+        <div className="links"><Link className="link" href="/invest">Investments</Link><Link className="link" href="/backfill">Past splits</Link><form action={logout}><button className="link">Sign out</button></form></div>
       </header>
 
       <section className="tiles">

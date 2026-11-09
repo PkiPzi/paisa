@@ -8,6 +8,13 @@
       "when": 1794261409368,
       "tag": "0000_chilly_ben_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794262497124,
+      "tag": "0001_white_famine",
+      "breakpoints": true
     }
   ]
 }

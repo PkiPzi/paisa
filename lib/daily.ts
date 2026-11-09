@@ -2,7 +2,8 @@
 import { gte, lt, and } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { istDay, rupees, summarize } from "./money";
-import { esc, swBalances, tgSend } from "./clients";
+import { esc, swBalances, tgSend, writeReview } from "./clients";
+import { lastMonthFacts, niftyChange, nudges, portfolio, refreshPrices, targetEquityPct, valueOf } from "./invest";
 
 const REMIND_DAYS = [3, 1, 0];
 
@@ -19,6 +20,31 @@ export async function runDaily(now = new Date()): Promise<string[]> {
     sent.push(`bill:${b.card}`);
   }
 
+  // Prices first, so the digest and review below use today's values. A failed feed must not stop the reminders.
+  const priced = await refreshPrices().catch(() => 0);
+  if (priced) sent.push(`prices:${priced}`);
+  const holdings = await db.select().from(schema.holdings);
+  const last = await lastMonthFacts(now);
+  const tips = nudges(holdings, last, targetEquityPct(), now);
+
+  if (today.endsWith("-01")) {
+    const p = portfolio(holdings);
+    const pct = (a: number, b: number) => (b ? `${a >= 0 ? "+" : ""}${((a / b) * 100).toFixed(1)}%` : "n/a");
+    const lines = [`📊 <b>${esc(last.month)} review</b>`, `Income ${rupees(last.income)} · spent ${rupees(last.spent)} · invested ${rupees(last.invested)}`];
+    if (holdings.length) lines.push(`Investments ${rupees(p.value)} (${pct(p.gain, p.invested)} on ${rupees(p.invested)} put in) · ${p.equityPct}% equity`);
+    const review = await writeReview({
+      month: last.month, incomeRupees: last.income / 100, spentRupees: last.spent / 100, investedThisMonthRupees: last.invested / 100,
+      portfolio: { valueRupees: p.value / 100, investedRupees: p.invested / 100, equityPercent: p.equityPct, targetEquityPercent: targetEquityPct() },
+      holdings: holdings.map((h) => ({ name: h.name, category: h.category, valueRupees: valueOf(h) / 100, gainPercent: h.invested ? Math.round(((valueOf(h) - h.invested) / h.invested) * 1000) / 10 : null })),
+      nifty50ChangePercent: await niftyChange(), observations: tips,
+    });
+    if (review) lines.push("", esc(review));
+    else if (tips.length) lines.push("", ...tips.map((t) => `• ${esc(t)}`));
+    lines.push("", "<i>Based on your own numbers; a prompt to think, not registered investment advice.</i>");
+    await tgSend(lines.join("\n"));
+    sent.push("review");
+  }
+
   if (new Date(`${today}T12:00:00Z`).getUTCDay() === 0) {
     const weekAgo = new Date(now.getTime() - 7 * 86_400_000);
     const week = await db.select().from(schema.txns).where(and(gte(schema.txns.at, weekAgo), lt(schema.txns.at, now)));
@@ -30,6 +56,7 @@ export async function runDaily(now = new Date()): Promise<string[]> {
       const owed = (await swBalances()).filter((b) => b.amount > 0);
       if (owed.length) lines.push("", "<b>Owed to you</b>", ...owed.slice(0, 6).map((b) => `• ${esc(b.name)} ${rupees(b.amount)}`));
     } catch { /* the digest still goes out without Splitwise */ }
+    if (tips.length) lines.push("", "<b>Worth a look</b>", ...tips.slice(0, 2).map((t) => `• ${esc(t)}`));
     await tgSend(lines.join("\n"));
     sent.push("digest");
   }

@@ -130,3 +130,11 @@ export async function guessCategories(items: { payee: string; amount: number; di
     60 * items.length + 200)) as { labels?: unknown[] } | null;
   return items.map((_, i) => (out?.labels?.length === items.length && validGuess(out.labels[i]) ? (out.labels[i] as Guess) : null));
 }
+
+/** Monthly review text written from the given facts only. Null when Groq is unavailable: the numbers are still sent. */
+export async function writeReview(facts: unknown): Promise<string | null> {
+  const out = (await groqJson(
+    `You write a short monthly money review for a salaried, hands-off investor in India who buys index and mutual funds through SIPs and does not trade. Use ONLY the facts in the JSON you are given. Never predict prices, never name a security to buy that is not in the facts, never suggest timing the market. Say what went well, what to watch, and at most two concrete, low-effort actions; if nothing needs doing, say so. Plain words, under 150 words. Reply with JSON {"review": string}.`,
+    JSON.stringify(facts), 700)) as { review?: unknown } | null;
+  return typeof out?.review === "string" && out.review.trim() ? out.review.trim() : null;
+}
