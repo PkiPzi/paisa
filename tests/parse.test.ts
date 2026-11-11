@@ -40,6 +40,11 @@ describe("parseEmail", () => {
     expect(parseEmail({ from: "offers@icicibank.com", subject: "Festive offers", text: "Get 10% off this season." }).kind).toBe("ignored");
   });
 
+  it("reads the merchant of a gateway receipt from the subject", () => {
+    const p = parseEmail({ from: "Payments <no-reply@razorpay.com>", subject: "Payment successful for ZEPTO MARKETPLACE PRIVATE LIMITED", text: "Amount paid ₹ 412.00" });
+    expect(p).toEqual({ kind: "receipt", merchant: "Zepto", category: "Groceries", amount: 41200 });
+  });
+
   it("reads a merchant receipt total", () => {
     const p = parseEmail({ from: "Rapido <noreply@rapido.bike>", subject: "Your ride receipt", text: "Thanks for riding.\nRide fare ₹80\nTotal ₹87" });
     expect(p).toEqual({ kind: "receipt", merchant: "Rapido", category: "Ride", amount: 8700 });

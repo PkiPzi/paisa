@@ -12,6 +12,7 @@ var SENDERS = [
   'icicibank.com', 'icici.bank.in', 'sbi.co.in', 'sbi.bank.in', 'sbicard.com', 'axisbank.com', 'axis.bank.in',
   // receipts used to label a matching payment
   'rapido.bike', 'uber.com', 'olacabs.com', 'swiggy.in', 'zomato.com', 'blinkit.com', 'zeptonow.com',
+  'razorpay.com', // payment receipts sent on a merchant's behalf, e.g. Zepto
 ];
 var MAX_PER_RUN = 40;
 

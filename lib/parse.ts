@@ -45,8 +45,10 @@ export function parseEmail(mail: { from: string; subject: string; text: string }
   const bank = BANKS.find(([re]) => re.test(mail.from))?.[1];
 
   if (!bank) {
-    const m = MERCHANTS.find(([re]) => re.test(mail.from));
-    const total = new RegExp(String.raw`(?:total|amount paid|you paid|bill)[^₹\d\n]{0,40}${MONEY}`, "i").exec(text);
+    // A payment gateway (Razorpay) names the merchant in the subject, not the sender.
+    const m = MERCHANTS.find(([re]) => re.test(`${mail.from} ${mail.subject}`));
+    // shortcut: the Razorpay body wording is a guess; check it against a stored mail once one has been forwarded.
+    const total = new RegExp(String.raw`(?:total|amount paid|you paid|bill|paid successfully|amount)[^₹\d\n]{0,40}${MONEY}`, "i").exec(text);
     return m && total ? { kind: "receipt", merchant: m[1], category: m[2], amount: toPaise(total[1]) } : { kind: "ignored" };
   }
 
