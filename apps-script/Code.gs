@@ -29,7 +29,8 @@ function forwardMail() {
       if (Math.floor(m.getDate().getTime() / 1000) > cursor) messages.push(m);
     });
   });
-  if (!messages.length) return; // the app (and its database) is only woken when there is mail
+  // the app (and its database) is only woken when there is mail
+  if (!messages.length) { console.log('no new mail from the listed senders'); return; }
   messages.sort(function (a, b) { return a.getDate() - b.getDate(); });
 
   var sent = 0;
@@ -61,6 +62,23 @@ function forwardMail() {
 function replayLast30Days() {
   PropertiesService.getScriptProperties().setProperty('CURSOR', String(Math.floor(Date.now() / 1000) - 30 * 86400));
   forwardMail();
+}
+
+/**
+ * Run by hand when nothing arrives. Sends nothing; it only prints what the last 7 days of the inbox hold:
+ * mail from the listed senders, and money-looking mail from senders that are NOT in the list.
+ */
+function checkMail() {
+  var show = function (title, query) {
+    var threads = GmailApp.search(query, 0, 20);
+    console.log(title + ': ' + threads.length);
+    threads.forEach(function (t) {
+      console.log('  ' + t.getMessages()[0].getFrom() + ' | ' + t.getFirstMessageSubject());
+    });
+  };
+  var listed = 'from:(' + SENDERS.join(' OR ') + ')';
+  show('From listed senders', listed + ' newer_than:7d');
+  show('Money mail from other senders', '-' + listed + ' newer_than:7d (debited OR credited OR UPI OR "transaction alert" OR "order" OR "payment")');
 }
 
 /** Run once by hand. Safe to re-run: it replaces its own trigger. */
