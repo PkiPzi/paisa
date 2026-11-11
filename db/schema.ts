@@ -24,8 +24,7 @@ export const txns = pgTable("txns", {
   category: text(), // null = waiting for an answer
   source: text(), // rule | memory | receipt | ai | user
   myShare: integer(), // set once split; spending counts this instead of amount
-  splitwiseId: text(),
-  splitWith: text(),
+  splitWith: text(), // who it was split or settled with, for display
   tgMessageId: integer(),
 });
 
@@ -33,7 +32,7 @@ export const txns = pgTable("txns", {
 export const payees = pgTable("payees", {
   key: text().primaryKey(),
   category: text(),
-  splitTarget: text(), // "g:<groupId>" or "f:<friendId>" when this payee is usually shared
+  splitTarget: text(), // "g:<circleId>" or "p:<personId>": who this payee is usually shared or settled with
   splitLabel: text(),
 });
 
@@ -66,4 +65,27 @@ export const holdings = pgTable("holdings", {
   price: doublePrecision(), // rupees per unit; null until the first refresh
   priceAt: text(),
   importedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------- the built-in "who owes whom" ledger ----------
+export const people = pgTable("people", {
+  id: serial().primaryKey(),
+  name: text().notNull().unique(),
+});
+
+/** A named set of people you often split with, e.g. "Flat". */
+export const circles = pgTable("circles", {
+  id: serial().primaryKey(),
+  name: text().notNull().unique(),
+  memberIds: text().notNull(), // JSON array of people.id
+});
+
+/** One line of the ledger. Positive: they owe you. Negative: you owe them, or they paid you back. */
+export const dues = pgTable("dues", {
+  id: serial().primaryKey(),
+  personId: integer().notNull(),
+  amount: integer().notNull(),
+  note: text().notNull(),
+  at: timestamp({ withTimezone: true }).notNull(),
+  txnId: integer(), // the payment this came from, if any
 });

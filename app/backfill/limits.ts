@@ -1,2 +1,2 @@
-/** Keeps one post inside the function time limit and under Splitwise bursts. */
-export const MAX_BATCH = 40;
+/** Most payments one preview-and-save can carry (they travel in the page address). */
+export const MAX_BATCH = 150;

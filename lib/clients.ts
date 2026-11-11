@@ -1,4 +1,4 @@
-// Thin clients for the three outside services: Telegram, Splitwise and Groq.
+// Thin clients for the two outside services: Telegram and Groq.
 import { requireEnv, env } from "./env";
 import { ALL } from "./money";
 
@@ -32,53 +32,6 @@ export function tgEdit(messageId: number, html: string, keyboard: Keyboard = [])
     chat_id: requireEnv("TG_CHAT_ID"), message_id: messageId, text: html, parse_mode: "HTML",
     reply_markup: { inline_keyboard: keyboard },
   });
-}
-
-// ---------- Splitwise ----------
-async function sw<T>(path: string, form?: Record<string, string>): Promise<T> {
-  const res = await fetch(`https://secure.splitwise.com/api/v3.0/${path}`, {
-    method: form ? "POST" : "GET",
-    headers: { Authorization: `Bearer ${requireEnv("SPLITWISE_API_KEY")}`, ...(form ? { "Content-Type": "application/x-www-form-urlencoded" } : {}) },
-    body: form ? new URLSearchParams(form) : undefined,
-  });
-  if (!res.ok) throw new Error(`splitwise ${path}: HTTP ${res.status}`);
-  return (await res.json()) as T;
-}
-
-type SwUser = { id: number; first_name: string | null; last_name: string | null };
-type SwBalance = { currency_code: string; amount: string };
-export type SwFriend = SwUser & { balance: SwBalance[]; updated_at: string };
-export type SwGroup = { id: number; name: string; updated_at: string; members: SwUser[] };
-
-export const swName = (u: SwUser) => u.first_name ?? "Friend";
-export const swMe = async () => (await sw<{ user: SwUser }>("get_current_user")).user;
-export const swFriends = async () => (await sw<{ friends: SwFriend[] }>("get_friends")).friends;
-/** Real groups only; id 0 is Splitwise's "non-group expenses" bucket. */
-export const swGroups = async () => (await sw<{ groups: SwGroup[] }>("get_groups")).groups.filter((g) => g.id !== 0);
-
-/** Net INR balance per friend in paise: positive = they owe you. */
-export async function swBalances(): Promise<{ name: string; amount: number }[]> {
-  return (await swFriends())
-    .map((f) => ({ name: swName(f), amount: Math.round(Number(f.balance.find((b) => b.currency_code === "INR")?.amount ?? 0) * 100) }))
-    .filter((b) => b.amount !== 0)
-    .sort((a, b) => b.amount - a.amount);
-}
-
-/** You paid the whole cost; `owed` is each person's share in paise, with you included. Returns the expense id. */
-export async function swCreateExpense(e: { cost: number; description: string; date: Date; groupId: number; meId: number; owed: { userId: number; amount: number }[] }): Promise<string> {
-  const form: Record<string, string> = {
-    cost: (e.cost / 100).toFixed(2), description: e.description, date: e.date.toISOString(),
-    currency_code: "INR", group_id: String(e.groupId),
-  };
-  e.owed.forEach((o, i) => {
-    form[`users__${i}__user_id`] = String(o.userId);
-    form[`users__${i}__paid_share`] = (o.userId === e.meId ? e.cost / 100 : 0).toFixed(2);
-    form[`users__${i}__owed_share`] = (o.amount / 100).toFixed(2);
-  });
-  const r = await sw<{ expenses?: { id: number }[]; errors?: Record<string, unknown> }>("create_expense", form);
-  const id = r.expenses?.[0]?.id;
-  if (!id) throw new Error(`splitwise refused the expense: ${JSON.stringify(r.errors ?? {}).slice(0, 200)}`);
-  return String(id);
 }
 
 // ---------- Groq (free tier) ----------

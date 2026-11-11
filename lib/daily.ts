@@ -2,7 +2,8 @@
 import { gte, lt, and } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { istDay, rupees, summarize } from "./money";
-import { esc, swBalances, tgSend, writeReview } from "./clients";
+import { esc, tgSend, writeReview } from "./clients";
+import { balances } from "./ledger";
 import { lastMonthFacts, niftyChange, nudges, portfolio, refreshPrices, targetEquityPct, valueOf } from "./invest";
 
 const REMIND_DAYS = [3, 1, 0];
@@ -52,10 +53,8 @@ export async function runDaily(now = new Date()): Promise<string[]> {
     const lines = [`🗓 <b>Your week</b>`, `Spent <b>${rupees(s.spent)}</b>`];
     s.byCategory.slice(0, 3).forEach(([c, v]) => lines.push(`• ${esc(c)} ${rupees(v)}`));
     if (s.unlabelled) lines.push(`${s.unlabelled} payment${s.unlabelled > 1 ? "s" : ""} still need a label.`);
-    try {
-      const owed = (await swBalances()).filter((b) => b.amount > 0);
-      if (owed.length) lines.push("", "<b>Owed to you</b>", ...owed.slice(0, 6).map((b) => `• ${esc(b.name)} ${rupees(b.amount)}`));
-    } catch { /* the digest still goes out without Splitwise */ }
+    const owed = (await balances()).filter((b) => b.amount > 0);
+    if (owed.length) lines.push("", "<b>Owed to you</b>", ...owed.slice(0, 6).map((b) => `• ${esc(b.name)} ${rupees(b.amount)}`));
     if (tips.length) lines.push("", "<b>Worth a look</b>", ...tips.slice(0, 2).map((t) => `• ${esc(t)}`));
     await tgSend(lines.join("\n"));
     sent.push("digest");

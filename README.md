@@ -1,12 +1,13 @@
 # Paisa
 
 Personal money tracker. Bank alert mails become labelled transactions; a Telegram bot asks only when it
-cannot work out what a payment was; shared payments go to Splitwise in two taps.
+cannot work out what a payment was; shared payments are split in two taps and tracked in a built-in
+"who owes whom" ledger (Splitwise's API is paid-only, so nothing depends on it).
 
 ```
 Gmail (bank alerts) --Apps Script, every 5 min--> /api/ingest/email --> Neon Postgres
                                                         |
-                              Telegram bot <------------+------> Splitwise, Groq (category guess)
+                              Telegram bot <------------+------> Groq (category guess)
 Vercel cron, 09:00 IST --> /api/cron/daily (card bill reminders, Sunday digest)
 ```
 
@@ -24,7 +25,7 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
 1. **Neon**: create a project and copy the pooled and direct connection strings.
 2. **Telegram**: create a bot with @BotFather. Send the bot any message, then open
    `https://api.telegram.org/bot<TOKEN>/getUpdates` and note `message.chat.id`.
-3. **Splitwise**: secure.splitwise.com/apps -> register an app -> create an API key.
+3. **Groq**: create a free API key at console.groq.com.
 4. **Vercel**: import this repo and set every variable from `.env.example`. The build runs the migrations.
 5. **Telegram webhook** (once, after the first deploy):
    ```
@@ -42,8 +43,16 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
 3. Store them: the same command with `--write` (needs `DATABASE_URL` in `.env.local`; set
    `PDF_PASSWORD=...` for locked PDFs). Rows dated on or after the first live bank mail are skipped,
    and re-running adds nothing twice.
-4. Open `/backfill`: tick the shared payments, choose a group or friend, check the dry-run preview,
-   then post. Splitwise notifies your friends for each expense, 40 at most per batch.
+4. Open `/backfill`: tick the shared payments, choose a group or person, check the preview, then save.
+
+## Who owes whom
+- Tap **Split** on a payment and pick a group or person for equal shares, or reply to the payment with
+  `me 300, Aman 500` for uneven ones. New names are added as you use them.
+- `/group Flat: Aman, Riya` makes a group. `/who` lists balances.
+- `Aman owes 500 dinner` and `owe Aman 500 cab` add lines by hand, e.g. opening balances copied from Splitwise.
+- Label a transfer to or from a friend `Settle-up` and pick the friend once; later transfers with the same
+  UPI id update the ledger without asking.
+- `/people` on the dashboard shows every balance and its history.
 
 ## Investments
 1. Export your holdings from Groww (mutual funds and stocks), or write a CSV with the header

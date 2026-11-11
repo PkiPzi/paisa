@@ -24,10 +24,10 @@ const rows = Array.from({ length: 64 }, (_, i) => {
   return {
     at: new Date(now - (i % 2 ? 0 : 30 * day) - ((i * 11) % 10) * day - (i % 9) * 3_600_000),
     amount: Math.round((amount * scale) / 100) * 100, direction: "debit", account, payee, category, source: category ? "memory" : null,
-    payeeKey: payee.toLowerCase(), myShare: null as number | null, splitWith: null as string | null, splitwiseId: null as string | null,
+    payeeKey: payee.toLowerCase(), myShare: null as number | null, splitWith: null as string | null,
   };
 }).filter((r, i) => !r.payee.includes("@ybl") || i < 24);
-Object.assign(rows[3], { myShare: Math.round(rows[3].amount / 4), splitWith: "Flat 302", splitwiseId: "demo" });
+Object.assign(rows[3], { myShare: Math.round(rows[3].amount / 4), splitWith: "Flat 302" });
 await db.insert(schema.txns).values([
   ...rows,
   { at: new Date(now - 2 * day), amount: 50000, direction: "credit", account: "ICICI a/c 1234", payee: "Aman Verma", payeeKey: "aman", category: "Settle-up", source: "user" },
@@ -36,5 +36,11 @@ await db.insert(schema.txns).values([
 await db.insert(schema.bills).values([
   { emailId: "demo-1", card: "ICICI card 5555", amount: 1840000, dueDate: new Date(now + 2 * day).toISOString().slice(0, 10) },
   { emailId: "demo-2", card: "Axis card 9876", amount: 612000, dueDate: new Date(now + 12 * day).toISOString().slice(0, 10) },
+]);
+const [aman, riya, karan] = await db.insert(schema.people).values([{ name: "Aman" }, { name: "Riya" }, { name: "Karan" }]).returning();
+await db.insert(schema.circles).values({ name: "Flat 302", memberIds: JSON.stringify([aman.id, riya.id, karan.id]) });
+await db.insert(schema.dues).values([
+  { personId: aman.id, amount: 184000, note: "Truffles", at: new Date(now - 3 * day) }, { personId: aman.id, amount: -50000, note: "Settle-up", at: new Date(now - 2 * day) },
+  { personId: riya.id, amount: 62000, note: "Zepto", at: new Date(now - 5 * day) }, { personId: karan.id, amount: -45000, note: "he paid for the cab", at: new Date(now - day) },
 ]);
 console.log("demo database ready in .pglite");

@@ -2,10 +2,11 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { parseEmail } from "./parse";
-import { CREDIT, DEBIT_OTHER, SPEND, equalShares, parseShares, rupees } from "./money";
-import { esc, guessCategory, swCreateExpense, swFriends, swGroups, swMe, swName, tg, tgEdit, tgSend, type Keyboard } from "./clients";
+import { CREDIT, DEBIT_OTHER, SPEND, parseShares, rupees } from "./money";
+import { esc, guessCategory, tg, tgEdit, tgSend, type Keyboard } from "./clients";
+import { addDue, balances, equalPlan, findOrCreatePerson, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
 
-const { emails, txns, payees, receipts, bills } = schema;
+const { emails, txns, payees, receipts, bills, people } = schema;
 type Txn = typeof txns.$inferSelect;
 
 const RECEIPT_WINDOW = sql`interval '45 minutes'`;
@@ -54,8 +55,14 @@ export async function ingestEmail(m: Mail): Promise<string> {
     const [t] = await db.insert(txns)
       .values({ emailId: m.id, at, amount: p.amount, direction: p.direction, account: p.account, payee, payeeKey: p.payeeKey, category, source })
       .returning();
+    if (category === "Settle-up" && known?.splitTarget?.startsWith("p:")) {
+      // A friend you have settled with before: the ledger is updated without asking.
+      const [friend] = await db.select().from(people).where(eq(people.id, Number(known.splitTarget.slice(2))));
+      if (friend) await settle(t, friend);
+      else await show(t);
+    }
     // Ask when unlabelled; offer the usual split when this payee is normally shared. Everything else stays silent.
-    if (!category || (known?.splitTarget && p.direction === "debit")) await show(t);
+    else if (!category || (known?.splitTarget && p.direction === "debit")) await show(t);
   }
   return p.kind;
 }
@@ -71,8 +78,19 @@ async function card(t: Txn): Promise<{ html: string; keyboard: Keyboard }> {
     keyboard.push(...rows(cats.map((c) => ({ text: c, callback_data: `c|${t.id}|${c}` })), 3));
   } else lines.push(`✓ ${t.category}${t.source === "ai" ? " (guessed)" : ""}`);
 
-  if (t.splitwiseId && t.splitwiseId !== "pending") lines.push(`➗ Split with ${esc(t.splitWith ?? "")} · your share ${rupees(t.myShare ?? t.amount)}`);
-  else if (t.direction === "debit" && (!t.category || isSpend(t.category))) {
+  if (t.category === "Settle-up") {
+    if (t.splitWith) {
+      lines.push(`🤝 Settled with ${esc(t.splitWith)}`);
+      keyboard.push([{ text: "↩ Undo", callback_data: `x|${t.id}` }]);
+    } else {
+      lines.push("Who was this with? Tap a name, or reply with one.");
+      const { people: ps } = await splitTargets();
+      keyboard.push(...rows(ps.slice(0, 8).map((p) => ({ text: p.name, callback_data: `w|${t.id}|${p.id}` })), 2));
+    }
+  } else if (t.myShare !== null) {
+    lines.push(`➗ Split with ${esc(t.splitWith ?? "")} · your share ${rupees(t.myShare)}`);
+    keyboard.push([{ text: "↩ Undo split", callback_data: `x|${t.id}` }]);
+  } else if (t.direction === "debit" && (!t.category || isSpend(t.category))) {
     const [known] = await getDb().select().from(payees).where(eq(payees.key, t.payeeKey));
     const split = [{ text: known?.splitTarget ? "➗ Someone else" : "➗ Split", callback_data: `s|${t.id}` }];
     if (known?.splitTarget) split.unshift({ text: `➗ Split with ${known.splitLabel}`, callback_data: `t|${t.id}|${known.splitTarget}` });
@@ -102,92 +120,65 @@ export async function setCategory(id: number, category: string | null) {
   if (t.tgMessageId) await show(t);
 }
 
-type Sw = { me: Awaited<ReturnType<typeof swMe>>; groups: Awaited<ReturnType<typeof swGroups>>; friends: Awaited<ReturnType<typeof swFriends>> };
-type Plan = { groupId: number; owed: { userId: number; amount: number }[]; label: string };
-
-export async function loadSplitwise(): Promise<Sw> {
-  const [me, groups, friends] = await Promise.all([swMe(), swGroups(), swFriends()]);
-  return { me, groups, friends };
-}
-
-/** Equal shares for a target ("g:<groupId>" or "f:<friendId>"), you first. Null when the target no longer exists. */
-export function equalPlan(sw: Sw, target: string, amount: number): Plan | null {
-  const [kind, rawId] = target.split(":");
-  const g = kind === "g" ? sw.groups.find((x) => String(x.id) === rawId) : undefined;
-  const f = kind === "f" ? sw.friends.find((x) => String(x.id) === rawId) : undefined;
-  if (!g && !f) return null;
-  const ids = [sw.me.id, ...(g ? g.members.map((m) => m.id).filter((id) => id !== sw.me.id) : [f!.id])];
-  const shares = equalShares(amount, ids.length);
-  return { groupId: g?.id ?? 0, owed: ids.map((userId, i) => ({ userId, amount: shares[i] })), label: g?.name ?? swName(f!) };
-}
-
-/**
- * Posts the expense to Splitwise once, even on a double tap, then records your share and the payee's habit.
- * Returns the updated transaction, or an error message; "" means it was already split.
- */
-export async function postSplit(t: Txn, meId: number, plan: Plan, target?: string): Promise<Txn | string> {
-  const db = getDb();
-  // Claim first: Splitwise notifies friends, so a second tap must not post a second expense.
-  const [claimed] = await db.update(txns).set({ splitwiseId: "pending" }).where(and(eq(txns.id, t.id), isNull(txns.splitwiseId))).returning();
-  if (!claimed) return "";
-  try {
-    const swId = await swCreateExpense({ cost: t.amount, description: t.payee.slice(0, 60), date: t.at, groupId: plan.groupId, meId, owed: plan.owed });
-    const myShare = plan.owed.find((o) => o.userId === meId)?.amount ?? 0;
-    const [done] = await db.update(txns).set({ splitwiseId: swId, myShare, splitWith: plan.label }).where(eq(txns.id, t.id)).returning();
-    if (target && t.payeeKey !== "unknown")
-      await db.insert(payees).values({ key: t.payeeKey, splitTarget: target, splitLabel: plan.label })
-        .onConflictDoUpdate({ target: payees.key, set: { splitTarget: target, splitLabel: plan.label } });
-    return done;
-  } catch (e) {
-    await db.update(txns).set({ splitwiseId: null }).where(eq(txns.id, t.id));
-    return `Splitwise did not accept it: ${e instanceof Error ? e.message : String(e)}`;
-  }
-}
-
-/** Bot side: post, then redraw the card with the result or the error. */
-async function splitAndShow(t: Txn, meId: number, plan: Plan, target?: string) {
-  const r = await postSplit(t, meId, plan, target);
-  if (r === "") return;
-  return typeof r === "string" ? show(t, { note: `⚠️ ${esc(r)}` }) : show(r);
-}
-
 async function splitEqually(t: Txn, target: string) {
-  const sw = await loadSplitwise();
-  const plan = equalPlan(sw, target, t.amount);
-  return plan ? splitAndShow(t, sw.me.id, plan, target) : show(t, { note: "⚠️ That Splitwise group or friend no longer exists." });
+  const plan = await equalPlan(target, t.amount);
+  if (!plan) return show(t, { note: "⚠️ That group or person no longer exists." });
+  const done = await postSplit(t, plan, target);
+  if (done) await show(done);
 }
 
-/** A typed reply to a card, e.g. "me 300, Aman 500". */
-async function splitByReply(t: Txn, text: string) {
+/** A typed reply to a payment card: shares such as "me 300, Aman 500", or a name for a settle-up. */
+async function handleReply(t: Txn, text: string) {
+  if (t.category === "Settle-up") {
+    const done = await settle(t, await findOrCreatePerson(text));
+    return done ? show(done) : undefined;
+  }
   const parts = parseShares(text);
   if (!parts) return tgSend("To split unevenly, reply to the payment with amounts, for example: <code>me 300, Aman 500</code>");
   const total = parts.reduce((a, p) => a + p.amount, 0);
   if (total !== t.amount) return tgSend(`Those add up to ${rupees(total)}, but the payment was ${rupees(t.amount)}.`);
-  const [me, friends] = await Promise.all([swMe(), swFriends()]);
-  const owed: { userId: number; amount: number }[] = [];
-  for (const p of parts) {
-    if (p.name === "me" || p.name === "i") { owed.push({ userId: me.id, amount: p.amount }); continue; }
-    const hits = friends.filter((f) => `${f.first_name ?? ""} ${f.last_name ?? ""}`.toLowerCase().startsWith(p.name));
-    if (hits.length !== 1) return tgSend(hits.length ? `More than one Splitwise friend matches "${esc(p.name)}". Add the surname.` : `No Splitwise friend is called "${esc(p.name)}".`);
-    owed.push({ userId: hits[0].id, amount: p.amount });
-  }
-  if (!owed.some((o) => o.userId === me.id)) owed.unshift({ userId: me.id, amount: 0 });
-  const label = parts.filter((p) => p.name !== "me" && p.name !== "i").map((p) => p.name[0].toUpperCase() + p.name.slice(1)).join(", ");
-  return splitAndShow(t, me.id, { groupId: 0, owed, label });
+  const isMe = (n: string) => n === "me" || n === "i";
+  const owed = [];
+  for (const p of parts.filter((x) => !isMe(x.name))) owed.push({ personId: (await findOrCreatePerson(p.name)).id, amount: p.amount, name: p.name });
+  const myShare = parts.filter((x) => isMe(x.name)).reduce((a, p) => a + p.amount, 0);
+  const label = owed.map((o) => o.name[0].toUpperCase() + o.name.slice(1)).join(", ");
+  const done = await postSplit(t, { label, myShare, dues: owed });
+  if (done) await show(done);
 }
 
 async function showSplitTargets(t: Txn) {
-  const [groups, friends] = await Promise.all([swGroups(), swFriends()]);
-  const recent = <T extends { updated_at: string }>(xs: T[]) => [...xs].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 4);
+  const { circles, people: ps } = await splitTargets();
   const buttons = [
-    ...recent(groups).map((g) => ({ text: `👥 ${g.name}`, callback_data: `t|${t.id}|g:${g.id}` })),
-    ...recent(friends).map((f) => ({ text: swName(f), callback_data: `t|${t.id}|f:${f.id}` })),
+    ...circles.slice(0, 4).map((g) => ({ text: `👥 ${g.name} (${g.size + 1})`, callback_data: `t|${t.id}|g:${g.id}` })),
+    ...ps.slice(0, 6).map((p) => ({ text: p.name, callback_data: `t|${t.id}|p:${p.id}` })),
   ];
   await show(t, {
-    note: "Split equally with whom? For uneven shares, reply to this message, e.g. <code>me 300, Aman 500</code>",
+    note: buttons.length
+      ? "Split equally with whom? For someone new or uneven shares, reply to this message, e.g. <code>me 300, Aman 500</code>"
+      : "No one to split with yet. Reply to this message with shares, e.g. <code>me 300, Aman 500</code>, or create a group: <code>/group Flat: Aman, Riya</code>",
     keyboard: [...rows(buttons, 2), [{ text: "← Back", callback_data: `b|${t.id}` }]],
   });
 }
+
+async function whoOwes(): Promise<string> {
+  const b = await balances();
+  if (!b.length) return "All settled up. Nobody owes anything.";
+  const line = (x: { name: string; amount: number }) => `• ${esc(x.name)} ${rupees(Math.abs(x.amount))}`;
+  const [owed, owe] = [b.filter((x) => x.amount > 0), b.filter((x) => x.amount < 0)];
+  return [
+    ...(owed.length ? [`<b>Owed to you · ${rupees(owed.reduce((a, x) => a + x.amount, 0))}</b>`, ...owed.map(line)] : []),
+    ...(owe.length ? [`<b>You owe · ${rupees(-owe.reduce((a, x) => a + x.amount, 0))}</b>`, ...owe.map(line)] : []),
+  ].join("\n");
+}
+
+const HELP = [
+  "I message you when a payment needs a label. Tap a button to label or split it, or reply to a payment with shares like <code>me 300, Aman 500</code>.",
+  "",
+  "<code>/who</code> — who owes whom",
+  "<code>/group Flat: Aman, Riya</code> — make a group for one-tap splits",
+  "<code>Aman owes 500 dinner</code> — add what someone owes you",
+  "<code>owe Aman 500 cab</code> — add what you owe someone",
+].join("\n");
 
 // ---------- Telegram webhook ----------
 type Update = {
@@ -205,16 +196,29 @@ export async function handleUpdate(u: Update, allowedChatId: string) {
     const [t] = await db.select().from(txns).where(eq(txns.id, Number(id)));
     if (!t) return;
     if (op === "c" && arg) await setCategory(t.id, arg);
-    else if (op === "u") await setCategory(t.id, null);
+    else if (op === "u") await setCategory((t.category === "Settle-up" ? await undoSplit(t) : t).id, null); // a settle-up cannot outlive its label
     else if (op === "s") await showSplitTargets(t);
     else if (op === "t" && arg) await splitEqually(t, arg);
-    else if (op === "b") await show(t);
+    else if (op === "x") await show(await undoSplit(t));
+    else if (op === "w" && arg) {
+      const [person] = await db.select().from(people).where(eq(people.id, Number(arg)));
+      const done = person && (await settle(t, person));
+      if (done) await show(done);
+    } else if (op === "b") await show(t);
     return;
   }
   const msg = u.message;
   if (!msg?.text || String(msg.chat.id) !== allowedChatId) return;
   const replyTo = msg.reply_to_message?.message_id;
   const [t] = replyTo ? await db.select().from(txns).where(eq(txns.tgMessageId, replyTo)) : [];
-  if (t) await splitByReply(t, msg.text);
-  else await tgSend("I message you when a payment needs a label. Tap a button to label or split it, or reply to a payment with shares like <code>me 300, Aman 500</code>.");
+  if (t) return handleReply(t, msg.text);
+
+  const cmd = parseCommand(msg.text);
+  if (cmd?.kind === "who") await tgSend(await whoOwes());
+  else if (cmd?.kind === "group") await tgSend(`👥 <b>${esc(cmd.name)}</b> saved with ${await saveCircle(cmd.name, cmd.members)} people. It now appears when you tap Split.`);
+  else if (cmd?.kind === "due") {
+    const p = await addDue(cmd.person, cmd.amount, cmd.note);
+    const net = (await balances()).find((b) => b.id === p.id)?.amount ?? 0;
+    await tgSend(`Noted. ${net === 0 ? `You and ${esc(p.name)} are settled up.` : net > 0 ? `${esc(p.name)} now owes you ${rupees(net)}.` : `You now owe ${esc(p.name)} ${rupees(-net)}.`}`);
+  } else await tgSend(HELP);
 }

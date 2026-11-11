@@ -2,8 +2,7 @@ import Link from "next/link";
 import { and, asc, desc, gte, lt } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { CREDIT, DEBIT_OTHER, SPEND, istDay, rupees, summarize } from "@/lib/money";
-import { swBalances } from "@/lib/clients";
-import { env } from "@/lib/env";
+import { balances } from "@/lib/ledger";
 import { logout } from "./login/actions";
 import { CategorySelect } from "./category-select";
 
@@ -35,7 +34,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       .where(and(gte(schema.txns.at, monthStart(shift(m, -1))), lt(schema.txns.at, monthStart(shift(m, 1)))))
       .orderBy(desc(schema.txns.at)),
     db.select().from(schema.bills).where(gte(schema.bills.dueDate, today)).orderBy(asc(schema.bills.dueDate)),
-    env("SPLITWISE_API_KEY") ? swBalances().catch(() => null) : null,
+    balances(),
   ]);
 
   const rows = all.filter((t) => t.at >= monthStart(m));
@@ -54,8 +53,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const elapsed = isCurrent ? dayOfMonth : daysInMonth;
   const maxCat = Math.max(1, ...s.byCategory.map(([, v]) => v));
 
-  const owedToYou = owed?.filter((b) => b.amount > 0) ?? [];
-  const youOwe = owed?.filter((b) => b.amount < 0) ?? [];
+  const owedToYou = owed.filter((b) => b.amount > 0);
+  const youOwe = owed.filter((b) => b.amount < 0);
   const list = sp.f === "todo" ? rows.filter((t) => !t.category) : rows;
   const byDay = Map.groupBy(list, (t) => istDay(t.at));
   const qs = (f?: string) => `/?m=${m}${f ? `&f=${f}` : ""}`;
@@ -69,7 +68,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <strong>{monthName(m)}</strong>
           {isCurrent ? <span aria-hidden className="off">›</span> : <Link href={`/?m=${shift(m, 1)}`} aria-label="Next month">›</Link>}
         </nav>
-        <div className="links"><Link className="link" href="/invest">Investments</Link><Link className="link" href="/backfill">Past splits</Link><form action={logout}><button className="link">Sign out</button></form></div>
+        <div className="links"><Link className="link" href="/invest">Investments</Link><Link className="link" href="/people">People</Link><Link className="link" href="/backfill">Past splits</Link><form action={logout}><button className="link">Sign out</button></form></div>
       </header>
 
       <section className="tiles">
@@ -80,20 +79,19 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             {change === null ? `${short(Math.round(s.spent / elapsed))} a day on average`
               : <><b>{change > 0 ? "▲" : change < 0 ? "▼" : ""} {Math.abs(change)}% {change > 0 ? "more" : change < 0 ? "less" : "same"}</b> than {isCurrent ? "this point in" : ""} {monthName(shift(m, -1), { month: "long" })} · {short(Math.round(s.spent / elapsed))} a day</>}
           </p>
-          {s.shared > 0 ? <p className="muted">{rupees(s.shared)} more was paid for friends and sits in Splitwise.</p> : null}
+          {s.shared > 0 ? <p className="muted">{rupees(s.shared)} more was paid for friends and is tracked under Owed to you.</p> : null}
         </div>
 
         <div className="card">
           <h2>Owed to you</h2>
-          {owed === null ? <p className="muted">{env("SPLITWISE_API_KEY") ? "Splitwise did not answer just now." : "Add a Splitwise API key to see balances."}</p> : <>
-            <p className="big">{rupees(owedToYou.reduce((a, b) => a + b.amount, 0))}</p>
-            <ul className="rows">
-              {owedToYou.slice(0, 4).map((b) => <li key={b.name}><span>{b.name}</span><span className="num">{rupees(b.amount)}</span></li>)}
-              {owedToYou.length > 4 ? <li className="muted"><span>and {owedToYou.length - 4} more</span></li> : null}
-              {youOwe.length ? <li className="muted"><span>You owe {youOwe.map((b) => b.name).slice(0, 3).join(", ")}</span><span className="num">{rupees(-youOwe.reduce((a, b) => a + b.amount, 0))}</span></li> : null}
-              {!owedToYou.length && !youOwe.length ? <li className="muted"><span>All settled up.</span></li> : null}
-            </ul>
-          </>}
+          <p className="big">{rupees(owedToYou.reduce((a, b) => a + b.amount, 0))}</p>
+          <ul className="rows">
+            {owedToYou.slice(0, 4).map((b) => <li key={b.id}><span>{b.name}</span><span className="num">{rupees(b.amount)}</span></li>)}
+            {owedToYou.length > 4 ? <li className="muted"><span>and {owedToYou.length - 4} more</span></li> : null}
+            {youOwe.length ? <li className="muted"><span>You owe {youOwe.map((b) => b.name).slice(0, 3).join(", ")}</span><span className="num">{rupees(-youOwe.reduce((a, b) => a + b.amount, 0))}</span></li> : null}
+            {!owedToYou.length && !youOwe.length ? <li className="muted"><span>All settled up.</span></li> : null}
+          </ul>
+          <Link className="more" href="/people">See everyone →</Link>
         </div>
 
         <div className="card">
