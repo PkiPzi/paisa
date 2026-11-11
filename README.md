@@ -36,6 +36,13 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
    show the manifest (Project Settings), paste `apps-script/Code.gs` and `appsscript.json`, add the script
    properties `APP_URL` and `CRON_SECRET`, run `installTrigger`, then run `forwardMail` once.
 
+7. **Bank SMS** (banks rarely email UPI debits): install "Incoming SMS to URL forwarder" from F-Droid on
+   the phone and add one rule: sender `(?i)(ICICI|SBI|AXIS)` as a regular expression, URL
+   `https://<app>/api/ingest/sms`, text filter `(?i)(debited|credited|spent|withdrawn|received)`, headers
+   `{"X-Cron-Secret":"<CRON_SECRET>"}`, payload `{"from":"%from%","text":"%text%","sentStamp":%sentStamp%}`.
+   The app drops non-bank senders and one-time passwords without storing them, and a payment reported by
+   both SMS and mail is stored once.
+
 ## Past statements and the Splitwise backfill
 1. Download the last 12 months: bank accounts as `.xls` / `.xlsx` / `.csv`, cards as statement PDFs.
 2. Dry run, and compare the printed totals with the statement:

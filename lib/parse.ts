@@ -40,9 +40,15 @@ export function payeeKeyOf(payee: string): string {
   return payee.toLowerCase().replace(/[^a-z0-9@._-]/g, "");
 }
 
+export const bankOf = (from: string) => BANKS.find(([re]) => re.test(from))?.[1];
+
+/** A one-time password message. A real alert that only warns "never share your OTP" is not one. */
+export const isOtp = (text: string) =>
+  /\b(otp|one time password)\b/i.test(text) && !/\b(debited|credited|spent|withdrawn|received)\b/i.test(text);
+
 export function parseEmail(mail: { from: string; subject: string; text: string }): Parsed {
   const text = `${mail.subject}\n${mail.text}`.replace(/[ \t ]+/g, " ");
-  const bank = BANKS.find(([re]) => re.test(mail.from))?.[1];
+  const bank = bankOf(mail.from);
 
   if (!bank) {
     // A payment gateway (Razorpay) names the merchant in the subject, not the sender.
@@ -52,7 +58,7 @@ export function parseEmail(mail: { from: string; subject: string; text: string }
     return m && total ? { kind: "receipt", merchant: m[1], category: m[2], amount: toPaise(total[1]) } : { kind: "ignored" };
   }
 
-  const last4 = /(?:XX+|xx+|\*{2,}|ending(?: in| with)?) ?(\d{3,4})\b/.exec(text)?.[1] ?? "";
+  const last4 = /(?:\b[Xx]+|\*{2,}|\bending(?: in| with)?) ?(\d{3,4})\b/.exec(text)?.[1] ?? "";
   const isCard = /credit card/i.test(text);
 
   const due = new RegExp(String.raw`total (?:amount )?due[^₹\d\n]{0,40}${MONEY}`, "i").exec(text);
@@ -62,8 +68,10 @@ export function parseEmail(mail: { from: string; subject: string; text: string }
     if (iso) return { kind: "bill", card: `${bank} card ${last4}`.trim(), amount: toPaise(due[1]), dueDate: iso };
   }
 
-  if (/\b(otp|one time password|declined|failed|unsuccessful|will be debited|is due)\b/i.test(text)) return { kind: "ignored" };
-  const amount = new RegExp(MONEY, "i").exec(text);
+  if (isOtp(text) || /\b(declined|failed|unsuccessful|will be debited|is due)\b/i.test(text)) return { kind: "ignored" };
+  // shortcut: SMS wording ("debited by 87.0", "; NAME credited") is from memory, not the user's real messages;
+  // re-check against stored `emails.body` rows whose id starts with "sms:".
+  const amount = new RegExp(MONEY, "i").exec(text) ?? /\b(?:debited|credited) (?:by|for|with) ([\d,]+(?:\.\d{1,2})?)/i.exec(text);
   // An alert can name both sides ("your a/c debited ... payee credited"); the first word is about your account.
   const dir = /\b(debited|debit|spent|used for|paid|withdrawn|purchase|credited|credit of|received|refund(?:ed)?|reversed)\b/i.exec(text);
   if (!amount || !dir) return { kind: "ignored" };
@@ -75,7 +83,8 @@ export function parseEmail(mail: { from: string; subject: string; text: string }
   const name =
     /merchant(?: name)?:? ?([^\n]{2,40})/i.exec(text)?.[1] ??
     /\binfo:? ?([^\n.]{2,40})/i.exec(text)?.[1] ??
-    new RegExp(String.raw`\b(?:${side}) ((?!your\b|a\/c\b|account\b|the\b|inr\b|rs\b)[A-Za-z0-9][\w &'*/-]{1,40}?)(?= on\b| has\b| via\b| with\b| ref\b| upi\b| using\b|[.,;\n]|$)`, "i").exec(text)?.[1];
+    (direction === "debit" ? /; ?([A-Za-z0-9][^;.\n]{1,40}?) credited\b/i.exec(text)?.[1] : undefined) ??
+    new RegExp(String.raw`\b(?:${side}) ((?!your\b|a\/c\b|account\b|the\b|inr\b|rs\b)[A-Za-z0-9][\w &'*/-]{1,40}?)(?= on\b| has\b| via\b| with\b| ref(?:no)?\b| upi\b| using\b|[.,;\n]|$)`, "i").exec(text)?.[1];
   const payee = (name ?? vpa ?? "Unknown").trim();
 
   return {

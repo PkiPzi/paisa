@@ -45,3 +45,15 @@ it("asks once, remembers the payee, and lets a receipt label a debit", async () 
   expect(all.map((t) => [t.category, t.source])).toEqual([["Ride", "user"], ["Ride", "memory"], ["Ride", "receipt"]]);
   expect(all[2].payee).toBe("driver9@ybl (Rapido)");
 });
+
+it("stores one payment when the bank sends both an SMS and a mail", async () => {
+  const db = getDb();
+  const count = async () => (await db.select().from(schema.txns)).length;
+  const before = await count();
+  const sms = { id: "sms:abc", from: "AD-ICICIT-S", subject: "", date: "2026-12-01T10:00:00Z", text: "ICICI Bank Acct XX1234 debited for Rs 311.00 on 01-Dec-26; SOME SHOP credited. UPI:1." };
+  expect(await ingestEmail(sms)).toBe("txn");
+  expect(await ingestEmail(upi("m-twin", "2026-12-01T10:03:00Z", "311.00", "someshop@ybl"))).toBe("duplicate");
+  // Two real payments of the same amount on one channel are both kept.
+  expect(await ingestEmail({ ...sms, id: "sms:def", date: "2026-12-01T10:05:00Z" })).toBe("txn");
+  expect(await count()).toBe(before + 2);
+});

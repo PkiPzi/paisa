@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDate, parseEmail } from "@/lib/parse";
+import { parseDate, parseEmail, isOtp } from "@/lib/parse";
 
 // Synthetic samples in typical alert wording; replace with real (redacted) mails once they arrive.
 describe("parseEmail", () => {
@@ -57,5 +57,20 @@ describe("parseDate", () => {
     expect(parseDate("25 Nov 2026")).toBe("2026-11-25");
     expect(parseDate("Nov 25, 2026")).toBe("2026-11-25");
     expect(parseDate("soon")).toBeNull();
+  });
+});
+
+describe("bank SMS", () => {
+  it("reads an ICICI UPI debit", () => {
+    const p = parseEmail({ from: "AD-ICICIT-S", subject: "", text: "ICICI Bank Acct XX123 debited for Rs 87.00 on 11-Nov-26; RAMESH K credited. UPI:630112345678. Call 18002662 for dispute." });
+    expect(p).toMatchObject({ kind: "txn", amount: 8700, direction: "debit", account: "ICICI a/c 123", payee: "RAMESH K" });
+  });
+  it("reads an SBI UPI debit that has no currency sign", () => {
+    const p = parseEmail({ from: "VM-SBIUPI", subject: "", text: "Dear UPI user A/C X1234 debited by 87.0 on date 11Nov26 trf to RAMESH Refno 630112345678. If not u? call 1800111109. -SBI" });
+    expect(p).toMatchObject({ kind: "txn", amount: 8700, direction: "debit", account: "SBI a/c 1234", payee: "RAMESH" });
+  });
+  it("tells a one-time password from an alert that mentions one", () => {
+    expect(isOtp("123456 is the OTP for txn of INR 500.00 at ZEPTO on card XX8734. Do not share.")).toBe(true);
+    expect(isOtp("Rs 500 debited from A/c XX1234. Never share your OTP with anyone.")).toBe(false);
   });
 });

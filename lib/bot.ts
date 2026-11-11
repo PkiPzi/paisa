@@ -39,6 +39,17 @@ export async function ingestEmail(m: Mail): Promise<string> {
   }
 
   if (p.kind === "txn") {
+    // A bank may send both a mail and an SMS for one payment: the second channel to arrive is dropped.
+    // shortcut: if both arrive in the same instant, both can be stored; add a unique key if that ever shows up.
+    const sms = m.id.startsWith("sms:");
+    const [twin] = await db.select({ id: txns.id }).from(txns).where(and(
+      eq(txns.amount, p.amount), eq(txns.direction, p.direction),
+      sql`split_part(${txns.account}, ' ', 1) = ${p.account.split(" ")[0]}`,
+      sms ? sql`${txns.emailId} not like 'sms:%'` : sql`${txns.emailId} like 'sms:%'`,
+      sql`${txns.at} between ${at.toISOString()}::timestamptz - interval '10 minutes' and ${at.toISOString()}::timestamptz + interval '10 minutes'`,
+    )).limit(1);
+    if (twin) return "duplicate";
+
     const known = p.payeeKey === "unknown" ? undefined : (await db.select().from(payees).where(eq(payees.key, p.payeeKey)))[0];
     let category: string | null = null, source: string | null = null, payee = p.payee;
     if (p.direction === "debit" && /credit ?card|\bcred\b/i.test(p.payee)) [category, source] = ["Card bill", "rule"];
