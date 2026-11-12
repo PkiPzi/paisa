@@ -1,4 +1,5 @@
-// One-time import of past statements, run on your own machine.
+// Import of statements, run on your own machine: once for the past year, then whenever you want to
+// catch payments the live alerts missed.
 //
 //   npx tsx scripts/import-statements.ts "ICICI a/c 1234" ~/Downloads/icici-2026.xls            (dry run)
 //   npx tsx scripts/import-statements.ts "ICICI a/c 1234" ~/Downloads/icici-2026.xls --write
@@ -9,10 +10,10 @@
 import { config } from "dotenv";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { like, min, not } from "drizzle-orm";
+import { and, gte, like, not } from "drizzle-orm";
 import XLSX from "xlsx";
-import { parseGrid, parsePdfText, payeeOf, type StmtRow } from "../lib/statement";
-import { rupees } from "../lib/money";
+import { missedRows, parseGrid, parsePdfText, payeeOf, type StmtRow } from "../lib/statement";
+import { istDay, rupees } from "../lib/money";
 
 config({ path: ".env.local" });
 const args = process.argv.slice(2).filter((a) => a !== "--write");
@@ -59,11 +60,16 @@ const { guessCategories } = await import("../lib/clients");
 const db = getDb();
 const { txns, payees } = schema;
 
-// Statements stop where live bank mail begins, so no payment is counted twice.
-const [{ first }] = await db.select({ first: min(txns.at) }).from(txns).where(not(like(txns.emailId, "stmt:%")));
-const cutoff = first ? first.toISOString().slice(0, 10) : "9999";
+// A payment already recorded from a live SMS or mail of the same bank is not stored again; statement rows
+// with no live match are kept, so an import also fills in whatever the alerts missed.
+const bank = account.split(" ")[0];
+const live = (await db.select({ at: txns.at, amount: txns.amount, direction: txns.direction, account: txns.account }).from(txns)
+  .where(and(not(like(txns.emailId, "stmt:%")), gte(txns.at, new Date(`${dates[0]}T00:00:00+05:30`)))))
+  .filter((t) => t.account.split(" ")[0] === bank)
+  .map((t) => ({ day: istDay(t.at), amount: t.amount, direction: t.direction }));
+const kept = missedRows(rows, live);
 const seen = new Map<string, number>();
-const items = rows.filter((r) => r.date < cutoff).map((r) => {
+const items = kept.map((r) => {
   // Identical rows on one day are real repeats; number them so a re-import or overlapping file adds nothing.
   const base = `${account}|${r.date}|${r.amount}|${r.direction}|${r.narration}`;
   const n = (seen.get(base) ?? 0) + 1;
@@ -101,6 +107,6 @@ for (let i = 0; i < items.length; i += 100) {
   })).onConflictDoNothing().returning({ id: txns.id });
   stored += res.length;
 }
-console.log(`\nStored ${stored} new rows (${items.length - stored} already present${first ? `, ${rows.length - items.length} on or after ${cutoff} left to live mail` : ""}).`);
+console.log(`\nStored ${stored} new rows (${items.length - stored} already present${rows.length - kept.length ? `, ${rows.length - kept.length} already recorded from live alerts` : ""}).`);
 console.log("Open /backfill on the dashboard to pick the shared ones.");
 process.exit(0);

@@ -15,7 +15,10 @@ export async function POST(req: Request) {
   if (!isCronAuthorized(req.headers)) return new NextResponse("forbidden", { status: 403 });
   const m = (await req.json().catch(() => null)) as { from?: unknown; text?: unknown; sentStamp?: unknown } | null;
   if (!m || typeof m.from !== "string" || typeof m.text !== "string") return NextResponse.json({ error: "bad payload" }, { status: 400 });
-  if (!bankOf(m.from) || isOtp(m.text)) return NextResponse.json({ result: "skipped" });
+  if (!bankOf(m.from) || isOtp(m.text)) {
+    console.log(`sms skipped from ${m.from}: ${bankOf(m.from) ? "one-time password" : "not a bank sender"}`); // never the text
+    return NextResponse.json({ result: "skipped" });
+  }
 
   const sent = Number(m.sentStamp);
   const date = new Date(sent > 0 ? sent : Date.now());

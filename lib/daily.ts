@@ -1,5 +1,5 @@
 // Once a day (09:00 IST): card bill reminders, and on Sundays the weekly digest.
-import { gte, lt, and } from "drizzle-orm";
+import { gte, lt, and, like, max } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { istDay, rupees, summarize } from "./money";
 import { esc, tgSend, writeReview } from "./clients";
@@ -19,6 +19,14 @@ export async function runDaily(now = new Date()): Promise<string[]> {
     if (!REMIND_DAYS.includes(days)) continue;
     await tgSend(`💳 <b>${esc(b.card)}</b> bill of <b>${rupees(b.amount)}</b> is due ${days === 0 ? "today" : `in ${days} day${days > 1 ? "s" : ""}`}.`);
     sent.push(`bill:${b.card}`);
+  }
+
+  // A phone that stops forwarding fails silently, so a long quiet spell is worth one message.
+  const [{ lastSms }] = await db.select({ lastSms: max(schema.emails.receivedAt) }).from(schema.emails).where(like(schema.emails.id, "sms:%"));
+  const quiet = lastSms ? Math.floor((now.getTime() - lastSms.getTime()) / 86_400_000) : 0;
+  if (quiet >= 3 && quiet % 3 === 0) {
+    await tgSend(`📵 No bank SMS has reached Paisa for ${quiet} days. If you have paid for anything since, open the SMS forwarder app on your phone and check it is still running.`);
+    sent.push("sms-quiet");
   }
 
   // Prices first, so the digest and review below use today's values. A failed feed must not stop the reminders.

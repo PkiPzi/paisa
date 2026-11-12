@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGrid, parsePdfText, payeeOf } from "@/lib/statement";
+import { missedRows, parseGrid, parsePdfText, payeeOf } from "@/lib/statement";
 
 // Synthetic layouts in the usual shape of Indian bank exports; replace with real (redacted) rows when available.
 describe("parseGrid", () => {
@@ -44,5 +44,15 @@ describe("payeeOf", () => {
   });
   it("falls back to the narration text", () => {
     expect(payeeOf("7412365890 SWIGGY BANGALORE IN").payeeKey).toBe("7412365890swiggybangalorein");
+  });
+});
+
+describe("missedRows", () => {
+  it("keeps only the statement rows that no live alert covers", () => {
+    const row = (date: string, amount: number) => ({ date, narration: "x", amount, direction: "debit" as const });
+    const live = [{ day: "2026-11-11", amount: 5000, direction: "debit" }];
+    const out = missedRows([row("2026-11-12", 5000), row("2026-11-12", 5000), row("2026-11-12", 9900)], live);
+    // One of the two Rs 50 rows is the live payment posted a day late; the other, and the Rs 99, were missed.
+    expect(out.map((r) => r.amount)).toEqual([5000, 9900]);
   });
 });

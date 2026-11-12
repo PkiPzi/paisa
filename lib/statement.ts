@@ -63,3 +63,21 @@ export function payeeOf(narration: string): { payee: string; payeeKey: string } 
   const payee = (name ?? vpa ?? narration).slice(0, 40).trim() || "Unknown";
   return { payee, payeeKey: payeeKeyOf(vpa ?? payee) };
 }
+
+/**
+ * Statement rows that no live alert already covers. A live payment (given as its IST day, amount and
+ * direction) accounts for one statement row of the same amount within a day either side, since banks
+ * post some payments a day late. What is left over was missed by SMS and mail.
+ */
+export function missedRows<R extends StmtRow>(rows: R[], live: { day: string; amount: number; direction: string }[]): R[] {
+  const pool = new Map<string, number>();
+  for (const l of live) pool.set(`${l.day}|${l.amount}|${l.direction}`, (pool.get(`${l.day}|${l.amount}|${l.direction}`) ?? 0) + 1);
+  const shift = (day: string, by: number) => new Date(Date.parse(`${day}T00:00:00Z`) + by * 86_400_000).toISOString().slice(0, 10);
+  return rows.filter((r) => {
+    for (const by of [0, -1, 1]) {
+      const k = `${shift(r.date, by)}|${r.amount}|${r.direction}`;
+      if (pool.get(k)) { pool.set(k, pool.get(k)! - 1); return false; }
+    }
+    return true;
+  });
+}

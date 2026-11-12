@@ -48,8 +48,9 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
 2. Dry run, and compare the printed totals with the statement:
    `npx tsx scripts/import-statements.ts "ICICI a/c 1234" ~/Downloads/icici.xls`
 3. Store them: the same command with `--write` (needs `DATABASE_URL` in `.env.local`; set
-   `PDF_PASSWORD=...` for locked PDFs). Rows dated on or after the first live bank mail are skipped,
-   and re-running adds nothing twice.
+   `PDF_PASSWORD=...` for locked PDFs). A row already recorded from a live SMS or mail (same bank and
+   amount, within a day) is skipped and re-running adds nothing twice, so importing a recent statement
+   also fills in any payment the live alerts missed.
 4. Open `/backfill`: tick the shared payments, choose a group or person, check the preview, then save.
 
 ## Who owes whom
