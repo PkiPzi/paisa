@@ -11,6 +11,7 @@ type Txn = typeof txns.$inferSelect;
 
 const RECEIPT_WINDOW = sql`interval '45 minutes'`;
 const AI_SILENT_AT = 0.8; // below this the bot asks instead of trusting the guess
+const WHY: Record<string, string> = { ai: " (guessed)", memory: " (same as last time)", receipt: " (from the receipt)", rule: " (automatic)" };
 const isSpend = (c: string | null) => c !== null && (SPEND as readonly string[]).includes(c);
 const rows = <T,>(items: T[], n: number) => items.reduce<T[][]>((acc, x, i) => (i % n ? acc[acc.length - 1].push(x) : acc.push([x]), acc), []);
 
@@ -66,14 +67,14 @@ export async function ingestEmail(m: Mail): Promise<string> {
     const [t] = await db.insert(txns)
       .values({ emailId: m.id, at, amount: p.amount, direction: p.direction, account: p.account, payee, payeeKey: p.payeeKey, category, source })
       .returning();
+    // Every payment gets a card, so you always see what was done and can change it with one tap.
+    let shown = t;
     if (category === "Settle-up" && known?.splitTarget?.startsWith("p:")) {
       // A friend you have settled with before: the ledger is updated without asking.
       const [friend] = await db.select().from(people).where(eq(people.id, Number(known.splitTarget.slice(2))));
-      if (friend) await settle(t, friend);
-      else await show(t);
+      if (friend) shown = (await settle(t, friend)) ?? t;
     }
-    // Ask when unlabelled; offer the usual split when this payee is normally shared. Everything else stays silent.
-    else if (!category || (known?.splitTarget && p.direction === "debit")) await show(t);
+    await show(shown);
   }
   return p.kind;
 }
@@ -87,7 +88,7 @@ async function card(t: Txn): Promise<{ html: string; keyboard: Keyboard }> {
     lines.push("What was this?");
     const cats = t.direction === "debit" ? [...SPEND, ...DEBIT_OTHER] : CREDIT;
     keyboard.push(...rows(cats.map((c) => ({ text: c, callback_data: `c|${t.id}|${c}` })), 3));
-  } else lines.push(`✓ ${t.category}${t.source === "ai" ? " (guessed)" : ""}`);
+  } else lines.push(`✓ ${t.category}${WHY[t.source ?? ""] ?? ""}`);
 
   if (t.category === "Settle-up") {
     if (t.splitWith) {

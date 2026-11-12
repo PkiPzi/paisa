@@ -18,6 +18,9 @@ Vercel cron, 09:00 IST --> /api/cron/daily (card bill reminders, Sunday digest)
 4. Groq guess, used silently only at 0.8 confidence or more.
 5. Otherwise the bot asks with one-tap buttons.
 
+Every payment gets a Telegram card, including the ones labelled automatically, with a **Change label**
+button. A change is remembered for that payee.
+
 Spending counts your share of a split payment, ignores `Own transfer`, `Card bill`, `Settle-up` and
 `Investment`, and subtracts refunds.
 

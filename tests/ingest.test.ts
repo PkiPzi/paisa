@@ -34,8 +34,9 @@ it("asks once, remembers the payee, and lets a receipt label a debit", async () 
   expect(sent.at(-1)!.method).toBe("editMessageText");
 
   const before = sent.length;
-  await ingestEmail(upi("m2", "2026-11-11T10:00:00Z")); // same payee again: labelled from memory, no message
-  expect(sent).toHaveLength(before);
+  await ingestEmail(upi("m2", "2026-11-11T10:00:00Z")); // same payee again: labelled from memory, and you are told
+  expect(sent).toHaveLength(before + 1);
+  expect(sent.at(-1)!.body.text).toContain("✓ Ride (same as last time)");
 
   // An unknown payee, then a Rapido receipt for the same amount 10 minutes later.
   await ingestEmail(upi("m3", "2026-11-12T10:00:00Z", "142.00", "driver9@ybl"));
