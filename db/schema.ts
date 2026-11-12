@@ -25,6 +25,7 @@ export const txns = pgTable("txns", {
   source: text(), // rule | memory | receipt | ai | user
   myShare: integer(), // set once split; spending counts this instead of amount
   splitWith: text(), // who it was split or settled with, for display
+  tag: text(), // optional sub-label typed by the user, e.g. "Wi-Fi" under Bills; totals still go by category
   tgMessageId: integer(),
 });
 
@@ -32,6 +33,7 @@ export const txns = pgTable("txns", {
 export const payees = pgTable("payees", {
   key: text().primaryKey(),
   category: text(),
+  tag: text(), // the sub-label this payee usually gets
   splitTarget: text(), // "g:<circleId>" or "p:<personId>": who this payee is usually shared or settled with
   splitLabel: text(),
 });

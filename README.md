@@ -21,6 +21,10 @@ Vercel cron, 09:00 IST --> /api/cron/daily (card bill reminders, Sunday digest)
 Every payment gets a Telegram card, including the ones labelled automatically, with a **Change label**
 button. A change is remembered for that payee.
 
+Reply to a card with `Wi-Fi` to add a sub-label, or `Bills: Wi-Fi` to set the category as well. Totals
+stay under the category; the sub-label shows on the payment and in the category's breakdown, and is
+reused for that payee.
+
 Spending counts your share of a split payment, ignores `Own transfer`, `Card bill`, `Settle-up` and
 `Investment`, and subtracts refunds.
 

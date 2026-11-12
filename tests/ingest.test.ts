@@ -11,7 +11,7 @@ vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
 });
 
 const { getDb, schema } = await import("@/db");
-const { ingestEmail, setCategory } = await import("@/lib/bot");
+const { ingestEmail, setCategory, handleUpdate } = await import("@/lib/bot");
 const upi = (id: string, date: string, rupees = "87.00", vpa = "ramesh.k@okaxis") => ({
   id, from: "alerts@icicibank.com", subject: "Transaction alert", date,
   text: `Your ICICI Bank Account XX1234 has been debited for Rs ${rupees} and account ${vpa} has been credited.`,
@@ -57,4 +57,15 @@ it("stores one payment when the bank sends both an SMS and a mail", async () => 
   // Two real payments of the same amount on one channel are both kept.
   expect(await ingestEmail({ ...sms, id: "sms:def", date: "2026-12-01T10:05:00Z" })).toBe("txn");
   expect(await count()).toBe(before + 2);
+});
+
+it("takes a typed sub-label, keeps the category for totals, and reuses both for the payee", async () => {
+  const db = getDb();
+  await ingestEmail(upi("w1", "2026-12-05T10:00:00Z", "799.00", "fibernet@icici"));
+  const [first] = (await db.select().from(schema.txns).orderBy(schema.txns.id)).slice(-1);
+  await handleUpdate({ message: { chat: { id: 1 }, text: "bills: Wi-Fi", reply_to_message: { message_id: first.tgMessageId! } } }, "1");
+  await ingestEmail(upi("w2", "2026-12-06T10:00:00Z", "799.00", "fibernet@icici"));
+  const last = (await db.select().from(schema.txns).orderBy(schema.txns.id)).slice(-2);
+  expect(last.map((t) => [t.category, t.tag])).toEqual([["Bills", "Wi-Fi"], ["Bills", "Wi-Fi"]]);
+  expect(sent.at(-1)!.body.text).toContain("✓ Bills · Wi-Fi (same as last time)");
 });

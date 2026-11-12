@@ -2,7 +2,7 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { parseEmail } from "./parse";
-import { CREDIT, DEBIT_OTHER, SPEND, parseShares, rupees } from "./money";
+import { ALL, CREDIT, DEBIT_OTHER, SPEND, parseShares, rupees } from "./money";
 import { esc, guessCategory, tg, tgEdit, tgSend, type Keyboard } from "./clients";
 import { addDue, balances, equalPlan, findOrCreatePerson, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
 
@@ -65,7 +65,7 @@ export async function ingestEmail(m: Mail): Promise<string> {
       }
     }
     const [t] = await db.insert(txns)
-      .values({ emailId: m.id, at, amount: p.amount, direction: p.direction, account: p.account, payee, payeeKey: p.payeeKey, category, source })
+      .values({ emailId: m.id, at, amount: p.amount, direction: p.direction, account: p.account, payee, payeeKey: p.payeeKey, category, source, tag: source === "memory" ? known?.tag ?? null : null })
       .returning();
     // Every payment gets a card, so you always see what was done and can change it with one tap.
     let shown = t;
@@ -88,7 +88,8 @@ async function card(t: Txn): Promise<{ html: string; keyboard: Keyboard }> {
     lines.push("What was this?");
     const cats = t.direction === "debit" ? [...SPEND, ...DEBIT_OTHER] : CREDIT;
     keyboard.push(...rows(cats.map((c) => ({ text: c, callback_data: `c|${t.id}|${c}` })), 3));
-  } else lines.push(`✓ ${t.category}${WHY[t.source ?? ""] ?? ""}`);
+    if (t.tag) lines.push(`🏷 ${esc(t.tag)}`);
+  } else lines.push(`✓ ${t.category}${t.tag ? ` · ${esc(t.tag)}` : ""}${WHY[t.source ?? ""] ?? ""}`);
 
   if (t.category === "Settle-up") {
     if (t.splitWith) {
@@ -125,10 +126,12 @@ async function show(t: Txn, extra?: { note?: string; keyboard?: Keyboard }) {
 // ---------- labelling and splitting ----------
 export async function setCategory(id: number, category: string | null) {
   const db = getDb();
-  const [t] = await db.update(txns).set({ category, source: category ? "user" : null }).where(eq(txns.id, id)).returning();
+  // "Change label" (null) also drops the sub-label, here and in the payee memory; picking a category keeps it.
+  const [t] = await db.update(txns).set({ category, source: category ? "user" : null, ...(category ? {} : { tag: null }) }).where(eq(txns.id, id)).returning();
   if (!t) return;
   if (category && t.payeeKey !== "unknown")
     await db.insert(payees).values({ key: t.payeeKey, category }).onConflictDoUpdate({ target: payees.key, set: { category } });
+  if (!category) await db.update(payees).set({ tag: null }).where(eq(payees.key, t.payeeKey));
   if (t.tgMessageId) await show(t);
 }
 
@@ -139,14 +142,36 @@ async function splitEqually(t: Txn, target: string) {
   if (done) await show(done);
 }
 
-/** A typed reply to a payment card: shares such as "me 300, Aman 500", or a name for a settle-up. */
+/** Stores a sub-label on the payment and remembers it for the payee. */
+async function setTag(t: Txn, tag: string): Promise<Txn> {
+  const db = getDb();
+  const [done] = await db.update(txns).set({ tag }).where(eq(txns.id, t.id)).returning();
+  if (t.payeeKey !== "unknown")
+    await db.insert(payees).values({ key: t.payeeKey, tag }).onConflictDoUpdate({ target: payees.key, set: { tag } });
+  return done;
+}
+
+const REPLY_HINT = "Reply to a payment with a sub-label such as <code>Wi-Fi</code> or <code>Bills: Wi-Fi</code>, or with shares to split it unevenly: <code>me 300, Aman 500</code>";
+
+/**
+ * A typed reply to a payment card: a name for a settle-up, shares such as "me 300, Aman 500",
+ * or a label: "Wi-Fi" (sub-label), "Bills: Wi-Fi" (category and sub-label) or "Bills" (category).
+ */
 async function handleReply(t: Txn, text: string) {
   if (t.category === "Settle-up") {
     const done = await settle(t, await findOrCreatePerson(text));
     return done ? show(done) : undefined;
   }
   const parts = parseShares(text);
-  if (!parts) return tgSend("To split unevenly, reply to the payment with amounts, for example: <code>me 300, Aman 500</code>");
+  if (!parts) {
+    const clean = text.trim().replace(/\s+/g, " ");
+    if (/\d/.test(clean) || clean.length > 40) return tgSend(REPLY_HINT); // digits mean a mistyped split, not a label
+    const m = /^([^:/]+?) ?[:/] ?(.+)$/.exec(clean);
+    const category = ALL.find((c) => c.toLowerCase() === (m ? m[1] : clean).toLowerCase());
+    if (category && !m) return setCategory(t.id, category);
+    const tagged = await setTag(t, m && category ? m[2] : clean);
+    return m && category ? setCategory(t.id, category) : show(tagged);
+  }
   const total = parts.reduce((a, p) => a + p.amount, 0);
   if (total !== t.amount) return tgSend(`Those add up to ${rupees(total)}, but the payment was ${rupees(t.amount)}.`);
   const isMe = (n: string) => n === "me" || n === "i";
@@ -184,7 +209,8 @@ async function whoOwes(): Promise<string> {
 }
 
 const HELP = [
-  "I message you when a payment needs a label. Tap a button to label or split it, or reply to a payment with shares like <code>me 300, Aman 500</code>.",
+  "I message you about every payment. Tap a button to label or split it, or reply to a payment with shares like <code>me 300, Aman 500</code>.",
+  "Reply to a payment with <code>Wi-Fi</code> to add a sub-label, or <code>Bills: Wi-Fi</code> to set both. Totals stay under the category.",
   "",
   "<code>/who</code> — who owes whom",
   "<code>/group Flat: Aman, Riya</code> — make a group for one-tap splits",

@@ -39,6 +39,13 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
 
   const rows = all.filter((t) => t.at >= monthStart(m));
   const s = summarize(rows);
+  // Sub-labels within each category, shown when a category bar is hovered or tapped.
+  const subs = new Map<string, Map<string, number>>();
+  for (const t of rows) {
+    if (!t.tag || !t.category || t.direction !== "debit") continue;
+    const m = subs.get(t.category) ?? subs.set(t.category, new Map()).get(t.category)!;
+    m.set(t.tag, (m.get(t.tag) ?? 0) + (t.myShare ?? t.amount));
+  }
   // Compare like with like: last month up to the same day of the month.
   const dayOfMonth = isCurrent ? Number(today.slice(8)) : 31;
   const prev = summarize(all.filter((t) => t.at < monthStart(m) && Number(istDay(t.at).slice(8)) <= dayOfMonth));
@@ -134,7 +141,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <h2>Where it went</h2>
           {s.byCategory.length ? <ul className="bars">
             {s.byCategory.map(([c, v]) => (
-              <li key={c} data-tip={`${Math.round((v / s.spent) * 100)}% of spending`} tabIndex={0}>
+              <li key={c} data-tip={`${Math.round((v / s.spent) * 100)}% of spending${subs.get(c) ? ` · ${[...subs.get(c)!].map(([k, x]) => `${k} ${rupees(x)}`).join(", ")}` : ""}`} tabIndex={0}>
                 <span>{c}</span>
                 <span className="track"><i style={{ width: `${(v / maxCat) * 100}%` }} /></span>
                 <span className="num">{rupees(v)}</span>
@@ -157,7 +164,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
               {items.map((t) => (
                 <li key={t.id}>
                   <div className="who">
-                    <span>{t.payee}</span>
+                    <span>{t.payee}{t.tag ? <small className="tag"> · {t.tag}</small> : null}</span>
                     <small className="muted">
                       {t.account} · {t.at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" })}
                       {t.myShare !== null ? ` · split with ${t.splitWith}, your share ${rupees(t.myShare)}` : ""}
