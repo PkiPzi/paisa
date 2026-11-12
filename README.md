@@ -53,9 +53,10 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
 8. **SMS sweeper** (so nothing is lost when the forwarder is killed or the phone is off): install Termux
    and Termux:API from F-Droid, run `pkg install termux-api jq curl`, copy `phone/paisa-sweep.sh` to the
    phone with the secret filled in, and schedule it:
-   `termux-job-scheduler --script ~/paisa-sweep.sh --period-ms 900000 --persisted true`.
+   `termux-job-scheduler --script ~/paisa-sweep.sh --period-ms 86400000 --persisted true` (once a day).
    It re-sends the last 3 days of bank SMS from the inbox; the app stores only what it does not have.
-   `sh ~/paisa-sweep.sh 30` sweeps 30 days once.
+   For a sweep on demand, install Termux:Widget, copy the script to `~/.shortcuts/`, and add the widget
+   to the home screen: one tap runs it. `sh ~/paisa-sweep.sh 30` sweeps 30 days once.
 
 ## Past statements and the Splitwise backfill
 1. Download the last 12 months: bank accounts as `.xls` / `.xlsx` / `.csv`, cards as statement PDFs.

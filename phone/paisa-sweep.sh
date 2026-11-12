@@ -4,6 +4,9 @@
 # were already stored are ignored by the app, so running it often is harmless.
 # Only messages whose sender looks like a bank leave the phone.
 #
+# Daily:     termux-job-scheduler --script ~/paisa-sweep.sh --period-ms 86400000 --persisted true
+# On demand: put a copy in ~/.shortcuts/ and add the Termux:Widget widget to the home screen.
+#
 # Needs: pkg install termux-api jq curl, the Termux:API app, and SMS permission for Termux:API.
 # shortcut: field names of termux-sms-list output were not checked on a real phone; the app accepts
 # number/address/sender and body/text, and received as "YYYY-MM-DD HH:MM:SS".
