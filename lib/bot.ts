@@ -1,8 +1,8 @@
 // The core loop: a forwarded mail becomes a labelled transaction, and the Telegram bot asks only when it must.
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { parseEmail } from "./parse";
-import { ALL, CREDIT, DEBIT_OTHER, SPEND, parseShares, rupees } from "./money";
+import { ALL, CREDIT, DEBIT_OTHER, SPEND, istDay, parseShares, rupees, summarize } from "./money";
 import { esc, guessCategory, tg, tgEdit, tgSend, type Keyboard } from "./clients";
 import { addDue, balances, equalPlan, findOrCreatePerson, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
 
@@ -81,8 +81,25 @@ export async function ingestEmail(m: Mail): Promise<string> {
 
 // ---------- the Telegram card for one transaction ----------
 async function card(t: Txn): Promise<{ html: string; keyboard: Keyboard }> {
-  const when = t.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
-  const lines = [`<b>${rupees(t.amount)}</b> ${t.direction === "debit" ? "to" : "from"} ${esc(t.payee)}`, `${esc(t.account)} · ${when}`];
+  const db = getDb();
+  const day = (d: Date, o: Intl.DateTimeFormatOptions) => d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", ...o });
+  const when = day(t.at, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  // Enough context to recognise the payment days later: the bank's reference, history with this payee, the day's total.
+  const [mail] = t.emailId ? await db.select({ body: emails.body }).from(emails).where(eq(emails.id, t.emailId)) : [];
+  const ref = /\b(?:UPI|Ref(?: ?no)?)[:. ]*(\d{9,})/i.exec(mail?.body ?? "")?.[1];
+  const lines = [`<b>${rupees(t.amount)}</b> ${t.direction === "debit" ? "to" : "from"} ${esc(t.payee)}`, `${esc(t.account)} · ${when}${ref ? ` · ref ${ref}` : ""}`];
+  if (t.payeeKey !== "unknown") {
+    const before = await db.select().from(txns).where(and(eq(txns.payeeKey, t.payeeKey), eq(txns.direction, t.direction), lt(txns.at, t.at))).orderBy(desc(txns.at)).limit(20);
+    const verb = t.direction === "debit" ? "payment" : "receipt";
+    lines.push(before.length
+      ? `${before.length === 20 ? "20+" : before.length} earlier ${verb}${before.length > 1 ? "s" : ""} · last ${rupees(before[0].amount)} on ${day(before[0].at, { day: "numeric", month: "short" })}${before[0].category ? ` (${esc(before[0].category)})` : ""}`
+      : `First ${verb} ${t.direction === "debit" ? "to" : "from"} them`);
+  }
+  if (t.direction === "debit") {
+    const start = new Date(`${istDay(t.at)}T00:00:00+05:30`);
+    const sameDay = await db.select().from(txns).where(and(gte(txns.at, start), lt(txns.at, new Date(start.getTime() + 86_400_000))));
+    lines.push(`Spent that day: ${rupees(summarize(sameDay).spent)}`);
+  }
   const keyboard: Keyboard = [];
   if (!t.category) {
     lines.push("What was this?");

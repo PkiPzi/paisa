@@ -69,3 +69,17 @@ it("takes a typed sub-label, keeps the category for totals, and reuses both for 
   expect(last.map((t) => [t.category, t.tag])).toEqual([["Bills", "Wi-Fi"], ["Bills", "Wi-Fi"]]);
   expect(sent.at(-1)!.body.text).toContain("✓ Bills · Wi-Fi (same as last time)");
 });
+
+it("sweeping the inbox adds only what the live forwarder missed", async () => {
+  const { ingestSms, smsTime } = await import("@/lib/sms");
+  const text = (ref: string) => `ICICI Bank Acct XX1234 debited for Rs 64.00 on 20-Dec-26; TEA STALL credited. UPI:${ref}. Call 18002662 for dispute.`;
+  const at = smsTime("2026-12-20 09:30:00")!;
+  expect(at.toISOString()).toBe("2026-12-20T04:00:00.000Z"); // phone time is IST
+  expect(await ingestSms("AX-ICICIT-S", text("111111111111"), at)).toBe("txn"); // live
+  expect(await ingestSms("AX-ICICIT-S", text("111111111111"), at)).toBe("duplicate"); // swept later
+  expect(await ingestSms("AX-ICICIT-S", text("222222222222"), new Date(at.getTime() + 60_000))).toBe("txn"); // missed live, same amount: kept
+  expect(await ingestSms("AX-ICICIT-S", "482913 is your OTP for txn of Rs 64.00", at)).toBe("skipped");
+  expect(await ingestSms("JM-JIOPAY", "Rs 64 debited", at)).toBe("skipped");
+  expect(sent.at(-1)!.body.text).toContain("ref 222222222222");
+  expect(sent.at(-1)!.body.text).toContain("1 earlier payment");
+});

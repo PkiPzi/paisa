@@ -50,6 +50,13 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
    The app drops non-bank senders and one-time passwords without storing them, and a payment reported by
    both SMS and mail is stored once.
 
+8. **SMS sweeper** (so nothing is lost when the forwarder is killed or the phone is off): install Termux
+   and Termux:API from F-Droid, run `pkg install termux-api jq curl`, copy `phone/paisa-sweep.sh` to the
+   phone with the secret filled in, and schedule it:
+   `termux-job-scheduler --script ~/paisa-sweep.sh --period-ms 900000 --persisted true`.
+   It re-sends the last 3 days of bank SMS from the inbox; the app stores only what it does not have.
+   `sh ~/paisa-sweep.sh 30` sweeps 30 days once.
+
 ## Past statements and the Splitwise backfill
 1. Download the last 12 months: bank accounts as `.xls` / `.xlsx` / `.csv`, cards as statement PDFs.
 2. Dry run, and compare the printed totals with the statement:
