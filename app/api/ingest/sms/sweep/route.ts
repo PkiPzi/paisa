@@ -4,7 +4,7 @@ import { ingestSms, smsTime } from "@/lib/sms";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-const MAX_NEW = 25; // each new payment costs a Groq call and a Telegram message; the next sweep takes the rest
+const BUDGET_MS = 40_000; // each new payment costs a Groq call and a Telegram message; the next sweep takes the rest
 
 /**
  * The safety net: the phone posts its recent inbox (phone/paisa-sweep.sh) and anything the live forwarder
@@ -26,8 +26,9 @@ export async function POST(req: Request) {
   }).sort((a, b) => a.at.getTime() - b.at.getTime());
 
   const count: Record<string, number> = { added: 0, duplicate: 0, skipped: 0, left: 0 };
+  const started = Date.now();
   for (const m of msgs) {
-    if (count.added >= MAX_NEW) { count.left++; continue; }
+    if (Date.now() - started > BUDGET_MS) { count.left++; continue; }
     const r = await ingestSms(m.from, m.text, m.at);
     count[r === "duplicate" || r === "skipped" ? r : "added"]++;
   }

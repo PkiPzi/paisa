@@ -40,6 +40,15 @@ export function payeeKeyOf(payee: string): string {
   return payee.toLowerCase().replace(/[^a-z0-9@._-]/g, "");
 }
 
+/** Merchants and gateways whose receipts are read; the mail must come from exactly this domain. */
+export const RECEIPT_DOMAINS = ["rapido.bike", "uber.com", "olacabs.com", "swiggy.in", "zomato.com", "blinkit.com", "zeptonow.com", "razorpay.com"];
+
+/** True for mail from a bank or a receipt sender. Anything else (a person, a recruiter at a merchant) is never stored. */
+export function knownMailSender(from: string): boolean {
+  const domain = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim().toLowerCase().split("@")[1] ?? "";
+  return !!bankOf(domain) || RECEIPT_DOMAINS.includes(domain);
+}
+
 export const bankOf = (from: string) => BANKS.find(([re]) => re.test(from))?.[1];
 
 /** A one-time password message. A real alert that only warns "never share your OTP" is not one. */
@@ -47,19 +56,20 @@ export const isOtp = (text: string) =>
   /\b(otp|one time password)\b/i.test(text) && !/\b(debited|credited|spent|withdrawn|received)\b/i.test(text);
 
 export function parseEmail(mail: { from: string; subject: string; text: string }): Parsed {
-  const text = `${mail.subject}\n${mail.text}`.replace(/[ \t ]+/g, " ");
+  const text = `${mail.subject}\n${mail.text}`.replace(/\r/g, "").replace(/[ \t\u00a0]+/g, " ");
   const bank = bankOf(mail.from);
 
   if (!bank) {
     // A payment gateway (Razorpay) names the merchant in the subject, not the sender.
     const m = MERCHANTS.find(([re]) => re.test(`${mail.from} ${mail.subject}`));
-    // shortcut: the Razorpay body wording is a guess; check it against a stored mail once one has been forwarded.
-    const total = new RegExp(String.raw`(?:total|amount paid|you paid|bill|paid successfully|amount)[^₹\d\n]{0,40}${MONEY}`, "i").exec(text);
+    // Razorpay puts the amount first: "₹303.00 Paid Successfully".
+    const total = new RegExp(String.raw`${MONEY}\s*paid successfully`, "i").exec(text)
+      ?? new RegExp(String.raw`(?:total|amount paid|you paid|bill|amount)[^₹\d\n]{0,40}${MONEY}`, "i").exec(text);
     return m && total ? { kind: "receipt", merchant: m[1], category: m[2], amount: toPaise(total[1]) } : { kind: "ignored" };
   }
 
   const last4 = /(?:\b[Xx]+|\*{2,}|\bending(?: in| with)?) ?(\d{3,4})\b/.exec(text)?.[1] ?? "";
-  const isCard = /credit card/i.test(text);
+  const isCard = /\bcard\b/i.test(text);
 
   const due = new RegExp(String.raw`total (?:amount )?due[^₹\d\n]{0,40}${MONEY}`, "i").exec(text);
   const dueDate = /due date[^\dA-Za-z\n]{0,10}(?:is |of |on )?([^\n]{6,20})/i.exec(text);
@@ -81,7 +91,8 @@ export function parseEmail(mail: { from: string; subject: string; text: string }
   const vpa = /\b[\w.-]{2,}@[a-z][a-z0-9]{1,}\b(?![.\w])/i.exec(text)?.[0];
   const side = direction === "debit" ? "at|to|towards" : "from|by";
   const name =
-    /merchant(?: name)?:? ?([^\n]{2,40})/i.exec(text)?.[1] ??
+    /merchant(?: name)?:?\s*([^\n]{2,40})/i.exec(text)?.[1] ?? // Axis mail puts the value on the next line
+    /\bon \d{1,2}-[A-Za-z]{3}-\d{2,4} on ([^.\n]{2,40})/i.exec(text)?.[1] ?? // ICICI card SMS: "spent ... on 12-Nov-26 on MERCHANT."
     /\binfo:? ?([^\n.]{2,40})/i.exec(text)?.[1] ??
     (direction === "debit" ? /; ?([A-Za-z0-9][^;.\n]{1,40}?) credited\b/i.exec(text)?.[1] : undefined) ??
     new RegExp(String.raw`\b(?:${side}) ((?!your\b|a\/c\b|account\b|the\b|inr\b|rs\b)[A-Za-z0-9][\w &'*/-]{1,40}?)(?= on\b| has\b| via\b| with\b| ref(?:no)?\b| upi\b| using\b|[.,;\n]|$)`, "i").exec(text)?.[1];

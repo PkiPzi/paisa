@@ -131,7 +131,7 @@ async function card(t: Txn): Promise<{ html: string; keyboard: Keyboard }> {
 }
 
 /** Sends the card, or redraws it in place when it is already in the chat. */
-async function show(t: Txn, extra?: { note?: string; keyboard?: Keyboard }) {
+export async function show(t: Txn, extra?: { note?: string; keyboard?: Keyboard }) {
   const c = await card(t);
   const html = extra?.note ? `${c.html}\n\n${extra.note}` : c.html;
   const keyboard = extra?.keyboard ?? c.keyboard;

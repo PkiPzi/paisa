@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDate, parseEmail, isOtp } from "@/lib/parse";
+import { parseDate, parseEmail, isOtp, knownMailSender } from "@/lib/parse";
 
 // Synthetic samples in typical alert wording; replace with real (redacted) mails once they arrive.
 describe("parseEmail", () => {
@@ -72,5 +72,29 @@ describe("bank SMS", () => {
   it("tells a one-time password from an alert that mentions one", () => {
     expect(isOtp("123456 is the OTP for txn of INR 500.00 at ZEPTO on card XX8734. Do not share.")).toBe(true);
     expect(isOtp("Rs 500 debited from A/c XX1234. Never share your OTP with anyone.")).toBe(false);
+  });
+});
+
+// Wording taken from real messages, with names and numbers changed.
+describe("real formats", () => {
+  it("reads the merchant of an ICICI card SMS, not the helpline number", () => {
+    const p = parseEmail({ from: "BP-ICICIT-S", subject: "", text: "INR 149.00 spent using ICICI Bank Card XX1234 on 12-Nov-26 on YOUTUBE CYBS. Avl Limit: INR 2,00,000.00. If not you, call 1800 2662/SMS BLOCK 1234 to 9215676766." });
+    expect(p).toMatchObject({ kind: "txn", amount: 14900, direction: "debit", account: "ICICI card 1234", payee: "YOUTUBE CYBS" });
+  });
+  it("reads an Axis card mail whose values sit on the next line", () => {
+    const p = parseEmail({ from: "Axis Bank Alerts <alerts@axis.bank.in>", subject: "INR 847 spent on credit card no. XX1234",
+      text: "07-11-2026\r\nDear Customer,\r\nHere's the summary of your Axis Bank Credit Card Transaction:\r\nTransaction Amount:\r\nINR 847\r\nMerchant Name:\r\nRSP*SWIGGY\r\nAxis Bank Credit Card No.\r\nXX1234\r\nDate & Time:\r\n07-11-2026, 15:08:21 IST" });
+    expect(p).toMatchObject({ kind: "txn", amount: 84700, direction: "debit", account: "Axis card 1234", payee: "RSP*SWIGGY" });
+  });
+  it("reads a Razorpay receipt, where the amount comes first", () => {
+    const p = parseEmail({ from: "Payments <no-reply@razorpay.com>", subject: "Payment successful for ZEPTO MARKETPLACE PRIVATE LIMITED",
+      text: "ZEPTO MARKETPLACE PRIVATE LIMITED\n[image: https://cdn.example/check.png]\n₹303.00\nPaid Successfully\nPayment Id pay_abc\nMethod upi someone@okicici" });
+    expect(p).toEqual({ kind: "receipt", merchant: "Zepto", category: "Groceries", amount: 30300 });
+  });
+  it("accepts mail only from banks and receipt senders", () => {
+    expect(knownMailSender("ICICI Bank <services@custcomm.icici.bank.in>")).toBe(true);
+    expect(knownMailSender("Payments <no-reply@razorpay.com>")).toBe(true);
+    expect(knownMailSender("A Recruiter <someone@external.swiggy.in>")).toBe(false);
+    expect(knownMailSender("Me <me@gmail.com>")).toBe(false);
   });
 });

@@ -16,6 +16,16 @@ var SENDERS = [
 ];
 var MAX_PER_RUN = 40;
 
+/** Banks may send from sub-domains; a receipt must come from exactly the listed domain, so mail from a person there is left alone. */
+function wanted(m) {
+  var from = m.getFrom();
+  var addr = ((from.match(/<([^>]+)>/) || [null, from])[1] || '').toLowerCase();
+  var domain = addr.split('@')[1] || '';
+  return SENDERS.some(function (d) {
+    return domain === d || (/bank|sbi/.test(d) && domain.slice(-d.length - 1) === '.' + d);
+  });
+}
+
 function forwardMail() {
   var props = PropertiesService.getScriptProperties();
   var url = (props.getProperty('APP_URL') || '').trim().replace(/\/+$/, '');
@@ -27,7 +37,7 @@ function forwardMail() {
   var messages = [];
   GmailApp.search('from:(' + SENDERS.join(' OR ') + ') after:' + (cursor - 60), 0, 50).forEach(function (t) {
     t.getMessages().forEach(function (m) {
-      if (Math.floor(m.getDate().getTime() / 1000) > cursor) messages.push(m);
+      if (Math.floor(m.getDate().getTime() / 1000) > cursor && wanted(m)) messages.push(m);
     });
   });
   // the app (and its database) is only woken when there is mail
