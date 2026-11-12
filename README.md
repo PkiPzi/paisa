@@ -75,6 +75,11 @@ Spending counts your share of a split payment, ignores `Own transfer`, `Card bil
 - Label a transfer to or from a friend `Settle-up` and pick the friend once; later transfers with the same
   UPI id update the ledger without asking.
 - `/people` on the dashboard shows every balance and its history.
+- `/merge Ratna into Ratnashree` folds a friend saved under two names into one.
+
+## Cash and the home screen
+- `spent 200 chai` in Telegram records a cash payment (also `cash 200` or `paid 200 auto`).
+- In Chrome on the phone, open the dashboard and choose "Add to Home screen" to get Paisa as its own app.
 
 ## Investments
 1. Export your holdings from Groww (mutual funds and stocks), or write a CSV with the header

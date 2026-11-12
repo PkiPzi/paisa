@@ -1,10 +1,10 @@
 // The core loop: a forwarded mail becomes a labelled transaction, and the Telegram bot asks only when it must.
 import { and, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db";
-import { parseEmail } from "./parse";
+import { parseEmail, payeeKeyOf } from "./parse";
 import { ALL, CREDIT, DEBIT_OTHER, SPEND, istDay, parseShares, rupees, summarize } from "./money";
 import { esc, guessCategory, tg, tgEdit, tgSend, type Keyboard } from "./clients";
-import { addDue, balances, equalPlan, findOrCreatePerson, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
+import { addDue, balances, equalPlan, findOrCreatePerson, mergePeople, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
 
 const { emails, txns, payees, receipts, bills, people } = schema;
 type Txn = typeof txns.$inferSelect;
@@ -200,6 +200,23 @@ async function handleReply(t: Txn, text: string) {
   if (done) await show(done);
 }
 
+/** A payment the bank never sees, typed as "spent 200 chai". Labelled from memory or a confident guess, else asked. */
+async function addCash(amount: number, note: string) {
+  const db = getDb();
+  const at = new Date();
+  const payeeKey = note ? payeeKeyOf(note) || "unknown" : "unknown";
+  const known = payeeKey === "unknown" ? undefined : (await db.select().from(payees).where(eq(payees.key, payeeKey)))[0];
+  let category = known?.category ?? null, source = category ? "memory" : null;
+  if (!category && note) {
+    const g = await guessCategory({ payee: note, amount, direction: "debit", at });
+    if (g && g.confidence >= AI_SILENT_AT) [category, source] = [g.category, "ai"];
+  }
+  const [t] = await db.insert(txns)
+    .values({ at, amount, direction: "debit", account: "Cash", payee: note || "Cash", payeeKey, category, source, tag: source === "memory" ? known?.tag ?? null : null })
+    .returning();
+  await show(t);
+}
+
 async function showSplitTargets(t: Txn) {
   const { circles, people: ps } = await splitTargets();
   const buttons = [
@@ -233,6 +250,8 @@ const HELP = [
   "<code>/group Flat: Aman, Riya</code> — make a group for one-tap splits",
   "<code>Aman owes 500 dinner</code> — add what someone owes you",
   "<code>owe Aman 500 cab</code> — add what you owe someone",
+  "<code>spent 200 chai</code> — add a cash payment",
+  "<code>/merge Ratna into Ratnashree</code> — one friend saved under two names",
 ].join("\n");
 
 // ---------- Telegram webhook ----------
@@ -271,7 +290,11 @@ export async function handleUpdate(u: Update, allowedChatId: string) {
   const cmd = parseCommand(msg.text);
   if (cmd?.kind === "who") await tgSend(await whoOwes());
   else if (cmd?.kind === "group") await tgSend(`👥 <b>${esc(cmd.name)}</b> saved with ${await saveCircle(cmd.name, cmd.members)} people. It now appears when you tap Split.`);
-  else if (cmd?.kind === "due") {
+  else if (cmd?.kind === "cash") await addCash(cmd.amount, cmd.note);
+  else if (cmd?.kind === "merge") {
+    const kept = await mergePeople(cmd.from, cmd.to);
+    await tgSend(kept ? `Merged. ${esc(cmd.from)}'s history now belongs to ${esc(kept.name)}.` : `I need two different names that are both in your ledger. <code>/who</code> lists them.`);
+  } else if (cmd?.kind === "due") {
     const p = await addDue(cmd.person, cmd.amount, cmd.note);
     const net = (await balances()).find((b) => b.id === p.id)?.amount ?? 0;
     await tgSend(`Noted. ${net === 0 ? `You and ${esc(p.name)} are settled up.` : net > 0 ? `${esc(p.name)} now owes you ${rupees(net)}.` : `You now owe ${esc(p.name)} ${rupees(-net)}.`}`);

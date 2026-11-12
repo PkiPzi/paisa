@@ -11,11 +11,16 @@ export type Person = typeof people.$inferSelect;
 export type Command =
   | { kind: "who" }
   | { kind: "group"; name: string; members: string[] }
-  | { kind: "due"; person: string; amount: number; note: string }; // amount > 0: they owe you
+  | { kind: "due"; person: string; amount: number; note: string } // amount > 0: they owe you
+  | { kind: "cash"; amount: number; note: string }
+  | { kind: "merge"; from: string; to: string };
 
 const cap = (s: string) => s.trim().replace(/\s+/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
-/** "/who", "/group Flat: Aman, Riya", "Aman owes 500 dinner", "owe Aman 500 cab". Null for anything else. */
+/**
+ * "/who", "/group Flat: Aman, Riya", "Aman owes 500 dinner", "owe Aman 500 cab",
+ * "spent 200 chai" (a cash payment), "/merge Ratna into Ratnashree". Null for anything else.
+ */
 export function parseCommand(text: string): Command | null {
   const t = text.trim();
   if (/^\/who\b/i.test(t)) return { kind: "who" };
@@ -24,6 +29,10 @@ export function parseCommand(text: string): Command | null {
     const members = g[2].split(",").map(cap).filter(Boolean);
     return members.length ? { kind: "group", name: cap(g[1]), members } : null;
   }
+  const cash = /^(?:spent|cash|paid)\s+₹?\s*(\d+(?:\.\d{1,2})?)(?:\s+(?:on|for|at)\b)?\s*(.*)$/i.exec(t);
+  if (cash) return { kind: "cash", amount: Math.round(Number(cash[1]) * 100), note: cash[2].trim() };
+  const merge = /^\/merge\s+(.+?)\s+into\s+(.+)$/i.exec(t);
+  if (merge) return { kind: "merge", from: cap(merge[1]), to: cap(merge[2]) };
   const theyOwe = /^([A-Za-z][A-Za-z .]*?)\s+owes?(?:\s+me)?\s+₹?\s*(\d+(?:\.\d{1,2})?)\s*(.*)$/i.exec(t);
   if (theyOwe) return { kind: "due", person: cap(theyOwe[1]), amount: Math.round(Number(theyOwe[2]) * 100), note: theyOwe[3].trim() || "Added by hand" };
   const iOwe = /^(?:i\s+)?owe\s+([A-Za-z][A-Za-z .]*?)\s+₹?\s*(\d+(?:\.\d{1,2})?)\s*(.*)$/i.exec(t);
@@ -40,6 +49,24 @@ export async function findOrCreatePerson(name: string): Promise<Person> {
   if (hit) return hit;
   const [made] = await db.insert(people).values({ name: clean }).onConflictDoNothing().returning();
   return made ?? (await db.select().from(people).where(eq(people.name, clean)))[0];
+}
+
+/** Folds one person into another (same friend under two names). Null when either name is unknown. */
+export async function mergePeople(fromName: string, toName: string): Promise<Person | null> {
+  const db = getDb();
+  const find = async (n: string) => (await db.select().from(people).where(sql`lower(${people.name}) = ${n.toLowerCase()}`))[0];
+  const [from, to] = [await find(fromName), await find(toName)];
+  if (!from || !to || from.id === to.id) return null;
+  await db.update(dues).set({ personId: to.id }).where(eq(dues.personId, from.id));
+  for (const c of await db.select().from(circles)) {
+    const ids = JSON.parse(c.memberIds) as number[];
+    if (ids.includes(from.id))
+      await db.update(circles).set({ memberIds: JSON.stringify([...new Set(ids.map((i) => (i === from.id ? to.id : i)))]) }).where(eq(circles.id, c.id));
+  }
+  await db.update(payees).set({ splitTarget: `p:${to.id}`, splitLabel: to.name }).where(eq(payees.splitTarget, `p:${from.id}`));
+  await db.update(txns).set({ splitWith: to.name }).where(eq(txns.splitWith, from.name));
+  await db.delete(people).where(eq(people.id, from.id)); // last, so a failure above leaves both people in place
+  return to;
 }
 
 export async function saveCircle(name: string, memberNames: string[]) {

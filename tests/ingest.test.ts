@@ -83,3 +83,10 @@ it("sweeping the inbox adds only what the live forwarder missed", async () => {
   expect(sent.at(-1)!.body.text).toContain("ref 222222222222");
   expect(sent.at(-1)!.body.text).toContain("1 earlier payment");
 });
+
+it("records a typed cash payment and shows its card", async () => {
+  await handleUpdate({ message: { chat: { id: 1 }, text: "spent 200 chai" } }, "1");
+  const [t] = (await getDb().select().from(schema.txns).orderBy(schema.txns.id)).slice(-1);
+  expect([t.account, t.amount, t.payee, t.direction]).toEqual(["Cash", 20000, "chai", "debit"]);
+  expect(sent.at(-1)!.body.text).toContain("₹200</b> to chai");
+});

@@ -19,6 +19,9 @@ describe("parseCommand", () => {
     expect(L.parseCommand("/group flat: aman, riya k")).toEqual({ kind: "group", name: "Flat", members: ["Aman", "Riya K"] });
     expect(L.parseCommand("Aman owes 500 dinner")).toEqual({ kind: "due", person: "Aman", amount: 50000, note: "dinner" });
     expect(L.parseCommand("owe riya 120.50")).toEqual({ kind: "due", person: "Riya", amount: -12050, note: "Added by hand" });
+    expect(L.parseCommand("spent 200 on chai")).toEqual({ kind: "cash", amount: 20000, note: "chai" });
+    expect(L.parseCommand("cash 45.50")).toEqual({ kind: "cash", amount: 4550, note: "" });
+    expect(L.parseCommand("/merge ratna into ratnashree")).toEqual({ kind: "merge", from: "Ratna", to: "Ratnashree" });
     expect(L.parseCommand("hello")).toBeNull();
   });
 });
@@ -51,5 +54,16 @@ describe("ledger", () => {
 
     await L.addDue("Riya", -50000, "she paid for the cab"); // you owe her more than she owes you
     expect(await net("Riya")).toBe(33333 - 50000);
+  });
+
+  it("merges one friend saved under two names", async () => {
+    await L.addDue("Ratna", 10000, "lunch");
+    await L.addDue("Ratnashree", 5000, "cab");
+    await L.saveCircle("Trip", ["Ratna", "Ratnashree"]);
+    expect((await L.mergePeople("ratna", "Ratnashree"))?.name).toBe("Ratnashree");
+    expect(await net("Ratnashree")).toBe(15000);
+    expect(await net("Ratna")).toBe(0);
+    expect((await L.splitTargets()).circles.find((c) => c.name === "Trip")?.size).toBe(1);
+    expect(await L.mergePeople("Nobody", "Ratnashree")).toBeNull();
   });
 });
