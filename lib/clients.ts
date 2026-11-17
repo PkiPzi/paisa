@@ -1,17 +1,17 @@
 // Thin clients for the two outside services: Telegram and Groq.
 import { requireEnv, env } from "./env";
-import { ALL } from "./money";
+import { ALL, type SplitPart } from "./money";
 
 // ---------- Telegram (the bot only ever talks to TG_CHAT_ID) ----------
 export type Keyboard = { text: string; callback_data: string }[][];
 
-export async function tg(method: string, body: Record<string, unknown>): Promise<{ message_id?: number } | undefined> {
+export async function tg(method: string, body: Record<string, unknown>): Promise<{ message_id?: number; file_path?: string } | undefined> {
   const res = await fetch(`https://api.telegram.org/bot${requireEnv("TG_BOT_TOKEN")}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const json = (await res.json()) as { ok: boolean; result?: { message_id?: number }; description?: string };
+  const json = (await res.json()) as { ok: boolean; result?: { message_id?: number; file_path?: string }; description?: string };
   // Editing a message to identical content is an error in Telegram's eyes, not ours.
   if (!json.ok && !/not modified/i.test(json.description ?? "")) throw new Error(`telegram ${method}: ${json.description ?? res.status}`);
   return typeof json.result === "object" ? json.result : undefined;
@@ -59,6 +59,39 @@ async function groqJson(system: string, user: string, maxTokens: number): Promis
   } catch {
     return null;
   }
+}
+
+/** A voice note as text (Telegram only sends the audio). `hint` lists names so Whisper spells them right. Null on any failure. */
+export async function transcribeVoice(fileId: string, hint: string): Promise<string | null> {
+  const key = env("GROQ_API_KEY");
+  if (!key) return null;
+  try {
+    const path = (await tg("getFile", { file_id: fileId }))?.file_path;
+    const audio = path ? await fetch(`https://api.telegram.org/file/bot${requireEnv("TG_BOT_TOKEN")}/${path}`) : null;
+    if (!audio?.ok) return null;
+    const form = new FormData();
+    form.set("file", new File([await audio.arrayBuffer()], "voice.ogg", { type: "audio/ogg" }));
+    form.set("model", env("GROQ_STT_MODEL") ?? "whisper-large-v3-turbo");
+    form.set("temperature", "0");
+    form.set("prompt", hint);
+    const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(30_000),
+    });
+    return res.ok ? ((await res.json()) as { text?: string }).text?.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Free-form split ("me 1/3 Sarthak 2/3", "equally with Aman and Riya") as parts; the code does the arithmetic. Null = not a split or no answer. */
+export async function parseSplit(text: string, known: { people: string[]; groups: string[] }): Promise<SplitPart[] | null> {
+  const out = (await groqJson(
+    `You read a typed or spoken instruction for splitting ONE shared payment. Reply with JSON {"split": boolean, "parts": [{"name": string, "amount"?: number, "share"?: string}]}. ` +
+    `split is false when the text is not about splitting (for example a label like "Wi-Fi"). One part per person; "me" is the speaker. "amount" is rupees exactly as said. "share" is the person's part of the whole as said: "1/3", "2/3", "20%". ` +
+    `Give neither when the person just shares equally. "equally with everyone/all" is a part named "all". Never calculate. Known people: ${JSON.stringify(known.people)}. Known groups: ${JSON.stringify(known.groups)}. If a name sounds like a known one, use the known spelling.`,
+    text, 400)) as { split?: unknown; parts?: unknown } | null;
+  const parts = out?.split === true && Array.isArray(out.parts) ? (out.parts as SplitPart[]) : null;
+  return parts?.length && parts.every((p) => p && typeof p.name === "string") ? parts : null;
 }
 
 const LABEL_RULES = `Categories: ${JSON.stringify(ALL)}. A known brand or merchant earns high confidence. A payment to a private person's name or UPI id is a guess: keep confidence below 0.5.`;

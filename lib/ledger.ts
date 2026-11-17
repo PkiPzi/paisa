@@ -88,6 +88,13 @@ export async function splitTargets() {
   return { circles: cs.map((c) => ({ id: c.id, name: c.name, size: (JSON.parse(c.memberIds) as number[]).length })), people: ps };
 }
 
+/** Circle name (lower case) -> member names, so "split with Flat" can name a group. */
+export async function circleMembers(): Promise<Map<string, string[]>> {
+  const db = getDb();
+  const names = new Map((await db.select().from(people)).map((p) => [p.id, p.name]));
+  return new Map((await db.select().from(circles)).map((c) => [c.name.toLowerCase(), (JSON.parse(c.memberIds) as number[]).flatMap((i) => names.get(i) ?? [])]));
+}
+
 /** Net position per person in paise: positive = they owe you. Settled people are left out. */
 export async function balances(): Promise<{ id: number; name: string; amount: number }[]> {
   const rows = await getDb().select({ id: people.id, name: people.name, amount: sql<number>`coalesce(sum(${dues.amount}), 0)::int` })

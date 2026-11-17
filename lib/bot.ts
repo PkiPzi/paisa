@@ -2,9 +2,9 @@
 import { and, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { parseEmail, payeeKeyOf } from "./parse";
-import { ALL, CREDIT, DEBIT_OTHER, SPEND, istDay, parseShares, rupees, summarize } from "./money";
-import { esc, guessCategory, tg, tgEdit, tgSend, type Keyboard } from "./clients";
-import { addDue, balances, equalPlan, findOrCreatePerson, mergePeople, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
+import { ALL, CREDIT, DEBIT_OTHER, SPEND, closestName, istDay, parseShares, resolveShares, rupees, summarize } from "./money";
+import { esc, guessCategory, parseSplit, tg, tgEdit, tgSend, transcribeVoice, type Keyboard } from "./clients";
+import { addDue, balances, circleMembers, equalPlan, findOrCreatePerson, mergePeople, parseCommand, postSplit, saveCircle, settle, splitTargets, undoSplit } from "./ledger";
 
 const { emails, txns, payees, receipts, bills, people } = schema;
 type Txn = typeof txns.$inferSelect;
@@ -170,16 +170,39 @@ async function setTag(t: Txn, tag: string): Promise<Txn> {
 
 const REPLY_HINT = "Reply to a payment with a sub-label such as <code>Wi-Fi</code> or <code>Bills: Wi-Fi</code>, or with shares to split it unevenly: <code>me 300, Aman 500</code>";
 
+const SPLITISH = /\d|split|equal|half|third|quarter|between|share|each|\band\b|,|\b(me|my|myself)\b/i;
+const EVERYONE = /^(all|everyone|everybody)$/;
+
+/** Any wording or a voice transcript -> exact shares. Null when it is not a split; a string is an error to show. */
+async function looseSplit(text: string, total: number) {
+  const [groups, { people: ps }] = [await circleMembers(), await splitTargets()];
+  const ai = await parseSplit(text, { people: ps.map((p) => p.name), groups: [...groups.keys()] });
+  if (!ai) return null;
+  // "with Flat" or "all" (when there is one group) means everyone in the group, equally.
+  const parts = ai.flatMap((p) => {
+    const key = EVERYONE.test(p.name.toLowerCase()) && groups.size === 1 ? [...groups.keys()][0] : p.name.toLowerCase();
+    const members = p.amount === undefined && !p.share ? groups.get(key) : undefined;
+    return members ? members.map((name) => ({ name })) : [p];
+  });
+  if (parts.some((p) => EVERYONE.test(p.name.toLowerCase()))) return "Split with whom? Name the people or a group (<code>/group Flat: Aman, Riya</code>).";
+  return resolveShares(parts, total);
+}
+
 /**
  * A typed reply to a payment card: a name for a settle-up, shares such as "me 300, Aman 500",
  * or a label: "Wi-Fi" (sub-label), "Bills: Wi-Fi" (category and sub-label) or "Bills" (category).
  */
-async function handleReply(t: Txn, text: string) {
+async function handleReply(t: Txn, text: string, heard = false) {
   if (t.category === "Settle-up") {
     const done = await settle(t, await findOrCreatePerson(text));
     return done ? show(done) : undefined;
   }
-  const parts = parseShares(text);
+  let parts = parseShares(text);
+  if (!parts && SPLITISH.test(text)) {
+    const r = await looseSplit(text, t.amount);
+    if (typeof r === "string") return tgSend(r);
+    parts = r;
+  }
   if (!parts) {
     const clean = text.trim().replace(/\s+/g, " ");
     if (/\d/.test(clean) || clean.length > 40) return tgSend(REPLY_HINT); // digits mean a mistyped split, not a label
@@ -188,6 +211,11 @@ async function handleReply(t: Txn, text: string) {
     if (category && !m) return setCategory(t.id, category);
     const tagged = await setTag(t, m && category ? m[2] : clean);
     return m && category ? setCategory(t.id, category) : show(tagged);
+  }
+  if (heard) {
+    // A voice note spells names by ear: snap them to people you already have instead of making a new one.
+    const known = (await splitTargets()).people.map((p) => p.name);
+    parts = parts.map((p) => ({ ...p, name: p.name === "me" || p.name === "i" ? p.name : closestName(p.name, known)?.toLowerCase() ?? p.name }));
   }
   const total = parts.reduce((a, p) => a + p.amount, 0);
   if (total !== t.amount) return tgSend(`Those add up to ${rupees(total)}, but the payment was ${rupees(t.amount)}.`);
@@ -244,6 +272,7 @@ async function whoOwes(): Promise<string> {
 
 const HELP = [
   "I message you about every payment. Tap a button to label or split it, or reply to a payment with shares like <code>me 300, Aman 500</code>.",
+  "Splits can be loose: <code>me 1/3, Aman 2/3</code>, <code>equally with Aman and Riya</code>, <code>Aman 250</code> (you cover the rest). Or send a voice note as the reply.",
   "Reply to a payment with <code>Wi-Fi</code> to add a sub-label, or <code>Bills: Wi-Fi</code> to set both. Totals stay under the category.",
   "",
   "<code>/who</code> — who owes whom",
@@ -256,7 +285,7 @@ const HELP = [
 
 // ---------- Telegram webhook ----------
 type Update = {
-  message?: { chat: { id: number }; text?: string; reply_to_message?: { message_id: number } };
+  message?: { chat: { id: number }; text?: string; voice?: { file_id: string }; reply_to_message?: { message_id: number } };
   callback_query?: { id: string; data?: string; message?: { chat: { id: number } } };
 };
 
@@ -282,12 +311,19 @@ export async function handleUpdate(u: Update, allowedChatId: string) {
     return;
   }
   const msg = u.message;
-  if (!msg?.text || String(msg.chat.id) !== allowedChatId) return;
+  if (!msg || String(msg.chat.id) !== allowedChatId) return;
+  let text = msg.text;
+  if (!text && msg.voice) {
+    const { circles, people: ps } = await splitTargets();
+    text = await transcribeVoice(msg.voice.file_id, `Money split in rupees between me and ${[...ps.slice(0, 8).map((p) => p.name), ...circles.slice(0, 3).map((c) => c.name)].join(", ")}.`) ?? undefined;
+    await tgSend(text ? `🎙 <i>${esc(text)}</i>` : "I couldn't make out that voice note. Try again, or type it.");
+  }
+  if (!text) return;
   const replyTo = msg.reply_to_message?.message_id;
   const [t] = replyTo ? await db.select().from(txns).where(eq(txns.tgMessageId, replyTo)) : [];
-  if (t) return handleReply(t, msg.text);
+  if (t) return handleReply(t, text, !msg.text);
 
-  const cmd = parseCommand(msg.text);
+  const cmd = parseCommand(text);
   if (cmd?.kind === "who") await tgSend(await whoOwes());
   else if (cmd?.kind === "group") await tgSend(`👥 <b>${esc(cmd.name)}</b> saved with ${await saveCircle(cmd.name, cmd.members)} people. It now appears when you tap Split.`);
   else if (cmd?.kind === "cash") await addCash(cmd.amount, cmd.note);

@@ -26,6 +26,65 @@ export function parseShares(text: string): { name: string; amount: number }[] | 
   return out.map((m) => ({ name: m![1].trim().toLowerCase(), amount: Math.round(Number(m![2]) * 100) }));
 }
 
+const sound = (n: string) => n.toLowerCase().replace(/[^a-z]/g, "").replace(/h/g, "").replace(/(.)\1+/g, "$1"); // Sarthak, Sartak, Saarthak -> sartak
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row.push(Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+/** The known name a misheard `name` most likely means ("Sartak" -> "Sarthak"), or null if none is close or two tie. First names match full ones. */
+export function closestName(name: string, known: string[]): string | null {
+  const a = sound(name);
+  if (a.length < 3) return null;
+  const scored = known.map((k) => {
+    const d = Math.min(...[k, ...k.split(/\s+/)].map((part) => { const b = sound(part); return editDistance(a, b) <= (b.length >= 6 ? 2 : b.length >= 4 ? 1 : 0) ? editDistance(a, b) : 99; }));
+    return { k, d };
+  }).filter((x) => x.d < 99).sort((x, y) => x.d - y.d);
+  return scored.length && (scored.length === 1 || scored[0].d < scored[1].d) ? scored[0].k : null;
+}
+
+export type SplitPart = { name: string; amount?: number; share?: string }; // amount in rupees; share "1/3", "20%" or "0.5"
+const ME = /^(me|i|myself|mine|my)$/;
+const shareOf = (s: string) => {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(%|\/\s*(\d+(?:\.\d+)?))?\s*$/.exec(s);
+  const f = m ? (m[2] === "%" ? Number(m[1]) / 100 : m[3] ? Number(m[1]) / Number(m[3]) : Number(m[1])) : NaN;
+  return f > 0 && f <= 1 ? f : null;
+};
+
+/**
+ * Turns loose split parts into exact paise per person, or an error to show the user.
+ * People with an amount or share are fixed; the rest split what is left equally. You are in the split even if unnamed.
+ */
+export function resolveShares(parts: SplitPart[], total: number): { name: string; amount: number }[] | string {
+  const rows: { name: string; fixed?: number }[] = [];
+  for (const p of parts) {
+    const name = p.name.trim().toLowerCase();
+    const f = typeof p.share === "string" ? shareOf(p.share) : undefined;
+    if (!name) return "I couldn't tell who one of the shares is for.";
+    if (f === null) return `I couldn't read the share "${p.share}".`;
+    if (typeof p.amount === "number" && !(p.amount >= 0)) return "An amount can't be negative.";
+    rows.push({ name: ME.test(name) ? "me" : name, fixed: typeof p.amount === "number" ? Math.round(p.amount * 100) : f !== undefined ? Math.round(total * f) : undefined });
+  }
+  if (!rows.some((r) => r.name === "me")) rows.unshift({ name: "me" });
+  if (rows.length < 2) return "Who is the split with?";
+  const rest = total - rows.reduce((a, r) => a + (r.fixed ?? 0), 0);
+  const pool = rows.filter((r) => r.fixed === undefined).sort((a, b) => +(b.name === "me") - +(a.name === "me"));
+  if (pool.length) {
+    if (rest < 0) return `Those add up to more than the payment of ${rupees(total)}.`;
+    equalShares(rest, pool.length).forEach((v, i) => (pool[i].fixed = v));
+  } else if (rest !== 0) {
+    // Fractions like 1/3 x3 miss by a paisa or two: the payer absorbs it.
+    if (Math.abs(rest) >= rows.length || !parts.some((p) => p.share)) return `Those add up to ${rupees(total - rest)}, but the payment was ${rupees(total)}.`;
+    rows.find((r) => r.name === "me")!.fixed! += rest;
+  }
+  return rows.map((r) => ({ name: r.name, amount: r.fixed! }));
+}
+
 export type Row = { at: Date; amount: number; direction: string; category: string | null; myShare: number | null };
 
 const IST_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
