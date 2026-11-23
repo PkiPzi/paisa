@@ -1,5 +1,5 @@
 // The core loop: a forwarded mail becomes a labelled transaction, and the Telegram bot asks only when it must.
-import { and, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { parseEmail, payeeKeyOf } from "./parse";
 import { ALL, CREDIT, DEBIT_OTHER, SPEND, closestName, istDay, parseShares, resolveShares, rupees, summarize } from "./money";
@@ -11,6 +11,9 @@ type Txn = typeof txns.$inferSelect;
 
 const RECEIPT_WINDOW = sql`interval '45 minutes'`;
 const AI_SILENT_AT = 0.8; // below this the bot asks instead of trusting the guess
+/** The labels you already use, for the AI to pick from. */
+const knownTags = async () => (await getDb().selectDistinct({ tag: txns.tag }).from(txns).where(isNotNull(txns.tag)).limit(60)).map((r) => r.tag!);
+
 const WHY: Record<string, string> = { ai: " (guessed)", memory: " (same as last time)", receipt: " (from the receipt)", rule: " (automatic)" };
 const isSpend = (c: string | null) => c !== null && (SPEND as readonly string[]).includes(c);
 const rows = <T,>(items: T[], n: number) => items.reduce<T[][]>((acc, x, i) => (i % n ? acc[acc.length - 1].push(x) : acc.push([x]), acc), []);
@@ -52,7 +55,7 @@ export async function ingestEmail(m: Mail): Promise<string> {
     if (twin) return "duplicate";
 
     const known = p.payeeKey === "unknown" ? undefined : (await db.select().from(payees).where(eq(payees.key, p.payeeKey)))[0];
-    let category: string | null = null, source: string | null = null, payee = p.payee;
+    let category: string | null = null, source: string | null = null, payee = p.payee, aiTag: string | undefined;
     if (p.direction === "debit" && /credit ?card|\bcred\b/i.test(p.payee)) [category, source] = ["Card bill", "rule"];
     else if (known?.category) [category, source] = [known.category, "memory"];
     else {
@@ -60,12 +63,12 @@ export async function ingestEmail(m: Mail): Promise<string> {
         sql`${receipts.at} between ${at.toISOString()}::timestamptz - ${RECEIPT_WINDOW} and ${at.toISOString()}::timestamptz + ${RECEIPT_WINDOW}`)) : [];
       if (r) [category, source, payee] = [r.category, "receipt", `${p.payee} (${r.merchant})`];
       else {
-        const g = await guessCategory({ payee: p.payee, amount: p.amount, direction: p.direction, at });
-        if (g && g.confidence >= AI_SILENT_AT) [category, source] = [g.category, "ai"];
+        const g = await guessCategory({ payee: p.payee, amount: p.amount, direction: p.direction, at }, await knownTags());
+        if (g && g.confidence >= AI_SILENT_AT) [category, source, aiTag] = [g.category, "ai", g.tag];
       }
     }
     const [t] = await db.insert(txns)
-      .values({ emailId: m.id, at, amount: p.amount, direction: p.direction, account: p.account, payee, payeeKey: p.payeeKey, category, source, tag: source === "memory" ? known?.tag ?? null : null })
+      .values({ emailId: m.id, at, amount: p.amount, direction: p.direction, account: p.account, payee, payeeKey: p.payeeKey, category, source, tag: source === "memory" ? known?.tag ?? null : aiTag ?? null })
       .returning();
     // Every payment gets a card, so you always see what was done and can change it with one tap.
     let shown = t;
@@ -159,8 +162,8 @@ async function splitEqually(t: Txn, target: string) {
   if (done) await show(done);
 }
 
-/** Stores a sub-label on the payment and remembers it for the payee. */
-async function setTag(t: Txn, tag: string): Promise<Txn> {
+/** Stores a sub-label (null clears it) on the payment and remembers it for the payee. */
+export async function setTag(t: Txn, tag: string | null): Promise<Txn> {
   const db = getDb();
   const [done] = await db.update(txns).set({ tag }).where(eq(txns.id, t.id)).returning();
   if (t.payeeKey !== "unknown")
@@ -234,13 +237,13 @@ async function addCash(amount: number, note: string) {
   const at = new Date();
   const payeeKey = note ? payeeKeyOf(note) || "unknown" : "unknown";
   const known = payeeKey === "unknown" ? undefined : (await db.select().from(payees).where(eq(payees.key, payeeKey)))[0];
-  let category = known?.category ?? null, source = category ? "memory" : null;
+  let category = known?.category ?? null, source = category ? "memory" : null, aiTag: string | undefined;
   if (!category && note) {
-    const g = await guessCategory({ payee: note, amount, direction: "debit", at });
-    if (g && g.confidence >= AI_SILENT_AT) [category, source] = [g.category, "ai"];
+    const g = await guessCategory({ payee: note, amount, direction: "debit", at }, await knownTags());
+    if (g && g.confidence >= AI_SILENT_AT) [category, source, aiTag] = [g.category, "ai", g.tag];
   }
   const [t] = await db.insert(txns)
-    .values({ at, amount, direction: "debit", account: "Cash", payee: note || "Cash", payeeKey, category, source, tag: source === "memory" ? known?.tag ?? null : null })
+    .values({ at, amount, direction: "debit", account: "Cash", payee: note || "Cash", payeeKey, category, source, tag: source === "memory" ? known?.tag ?? null : aiTag ?? null })
     .returning();
   await show(t);
 }

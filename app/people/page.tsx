@@ -2,10 +2,12 @@ import Link from "next/link";
 import { desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { istDay, rupees } from "@/lib/money";
+import { recordSettle } from "../actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function People() {
+export default async function People({ searchParams }: { searchParams: Promise<{ err?: string }> }) {
+  const { err } = await searchParams;
   const db = getDb();
   const [people, lines, circles] = await Promise.all([
     db.select().from(schema.people),
@@ -21,6 +23,22 @@ export default async function People() {
   return (
     <main className="page narrow">
       <header className="top"><Link className="brand" href="/">Paisa</Link><Link className="link" href="/">← Dashboard</Link></header>
+
+      {err ? <p className="nudge static">{err}</p> : null}
+      <section className="card">
+        <h2>Record a payment</h2>
+        <p className="muted">Cash, or any transfer that is not in your bank feed. For one that is, set its category to Settle-up on the dashboard and pick the person.</p>
+        <form action={recordSettle} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          <input className="pill" name="name" list="who" placeholder="Person" required style={{ width: "9em" }} />
+          <datalist id="who">{people.map((p) => <option key={p.id} value={p.name} />)}</datalist>
+          <input className="pill" name="amount" type="number" min="0.01" step="0.01" placeholder="₹ Amount" required style={{ width: "8em" }} />
+          <select className="pill" name="dir" aria-label="Direction" defaultValue="in">
+            <option value="in">They paid me</option><option value="out">I paid them</option>
+          </select>
+          <input className="pill" name="note" placeholder="Note (optional)" style={{ width: "11em" }} />
+          <button className="btn">Record</button>
+        </form>
+      </section>
 
       {!rows.length ? (
         <section className="card"><h2>People</h2><p className="muted">Nobody yet. Split a payment in Telegram, or send the bot <code>/group Flat: Aman, Riya</code> or <code>Aman owes 500 dinner</code>.</p></section>

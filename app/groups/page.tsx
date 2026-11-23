@@ -5,6 +5,7 @@ import { DEBIT_OTHER, SPEND, istDay, rupees } from "@/lib/money";
 import { groupTxns } from "@/lib/ledger";
 import { CategorySelect } from "../category-select";
 import { editSplit } from "../actions";
+import { TagInput } from "../tag-input";
 import { SplitEditor, splitContext } from "../split-editor";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,7 @@ export default async function Groups({ searchParams }: { searchParams: Promise<{
     <main className="page narrow">
       <header className="top"><Link className="brand" href="/">Paisa</Link><Link className="link" href="/">← Dashboard</Link></header>
       {err ? <p className="nudge static">{err}</p> : null}
+      <datalist id="tags">{[...new Set(groups.flatMap((g) => g.items.flatMap((t) => t.tag ?? [])))].map((x) => <option key={x} value={x} />)}</datalist>
       {!groups.length ? <section className="card"><h2>Groups</h2><p className="muted">No groups yet. Send the bot <code>/group Trip: Aman, Riya</code> to make one.</p></section> : null}
       {groups.map((g) => (
         <details className="card person" key={g.id} open>
@@ -37,7 +39,7 @@ export default async function Groups({ searchParams }: { searchParams: Promise<{
           <ul className="txns">
             {g.items.map((t) => (
               <li key={t.id}>
-                <div className="who"><span>{t.payee}</span><small className="muted">{istDay(t.at)} · your share {rupees(t.myShare ?? 0)}</small></div>
+                <div className="who"><span>{t.payee}</span><small className="muted">{istDay(t.at)} · your share {rupees(t.myShare ?? 0)}</small><TagInput id={t.id} value={t.tag} /></div>
                 <CategorySelect id={t.id} value={t.category} options={[...SPEND, ...DEBIT_OTHER]} />
                 <span className="num amt">{rupees(t.amount)}</span>
                 <SplitEditor t={t} ctx={ctx} back="/groups" />

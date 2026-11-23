@@ -5,6 +5,7 @@ import { CREDIT, DEBIT_OTHER, SPEND, istDay, rupees, summarize } from "@/lib/mon
 import { balances } from "@/lib/ledger";
 import { logout } from "./login/actions";
 import { CategorySelect } from "./category-select";
+import { TagInput } from "./tag-input";
 import { SplitEditor, splitContext } from "./split-editor";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const list = sp.f === "todo" ? rows.filter((t) => !t.category) : rows;
   const byDay = Map.groupBy(list, (t) => istDay(t.at));
   const ctx = await splitContext(list);
+  const allTags = [...new Set(all.flatMap((t) => t.tag ?? []))];
   const qs = (f?: string) => `/?m=${m}${f ? `&f=${f}` : ""}`;
 
   return (
@@ -154,6 +156,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       </section>
 
       {sp.err ? <p className="nudge static">{sp.err}</p> : null}
+      <datalist id="tags">{allTags.map((x) => <option key={x} value={x} />)}</datalist>
       <section className="card">
         <div className="listhead">
           <h2>{sp.f === "todo" ? "Needs a label" : "Transactions"}</h2>
@@ -167,11 +170,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
               {items.map((t) => (
                 <li key={t.id}>
                   <div className="who">
-                    <span>{t.payee}{t.tag ? <small className="tag"> · {t.tag}</small> : null}</span>
+                    <span>{t.payee}</span>
                     <small className="muted">
                       {t.account} · {t.at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" })}
                       {t.myShare !== null ? ` · split with ${t.splitWith}, your share ${rupees(t.myShare)}` : ""}
                     </small>
+                    <TagInput id={t.id} value={t.tag} />
                   </div>
                   <CategorySelect id={t.id} value={t.category} options={t.direction === "debit" ? [...SPEND, ...DEBIT_OTHER] : [...CREDIT]} />
                   <span className={`num amt${t.direction === "credit" ? " in" : ""}`}>{t.direction === "credit" ? "+" : ""}{rupees(t.amount)}</span>

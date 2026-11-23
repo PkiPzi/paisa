@@ -16,6 +16,25 @@ export function SplitEditor({ t, ctx, back }: { t: Txn; ctx: SplitContext; back:
   const hidden = (
     <><input type="hidden" name="txn" value={t.id} /><input type="hidden" name="back" value={back} /></>
   );
+  if (t.category === "Settle-up") {
+    const who = ctx.targets.people.find((p) => p.name === t.splitWith);
+    return (
+      <form action={editSplit} style={{ gridColumn: "1 / -1", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        {hidden}
+        {t.splitWith ? <>
+          <input type="hidden" name="target" value={`p:${who?.id}`} />
+          <span className="muted">Settled with {t.splitWith}</span>
+          <button className="btn ghost" name="op" value="remove">Undo</button>
+        </> : ctx.targets.people.length ? <>
+          <select name="target" className="pill" required aria-label="Settled with" defaultValue="">
+            <option value="" disabled>Settled with…</option>
+            {ctx.targets.people.map((p) => <option key={p.id} value={`p:${p.id}`}>{p.name}</option>)}
+          </select>
+          <button className="btn ghost" name="op" value="settle">Settle</button>
+        </> : null}
+      </form>
+    );
+  }
   if (t.direction !== "debit") return null;
 
   if (t.myShare === null && t.splitWith === null) {

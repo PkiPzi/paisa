@@ -95,17 +95,19 @@ export async function parseSplit(text: string, known: { people: string[]; groups
 }
 
 const LABEL_RULES = `Categories: ${JSON.stringify(ALL)}. A known brand or merchant earns high confidence. A payment to a private person's name or UPI id is a guess: keep confidence below 0.5.`;
-type Guess = { category: string; confidence: number };
+type Guess = { category: string; confidence: number; tag?: string };
 const validGuess = (g: unknown): g is Guess =>
   !!g && typeof (g as Guess).confidence === "number" && ALL.includes((g as Guess).category);
 
 /** Category guess from payee, amount and time only: no account numbers leave the app. Null = no usable answer. */
-export async function guessCategory(t: { payee: string; amount: number; direction: string; at: Date }): Promise<Guess | null> {
+export async function guessCategory(t: { payee: string; amount: number; direction: string; at: Date }, tags: string[] = []): Promise<Guess | null> {
   const time = t.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "numeric", minute: "2-digit" });
   const out = await groqJson(
-    `You label one bank transaction of a salaried person in India. Reply with JSON {"category": string, "confidence": 0 to 1}. ${LABEL_RULES}`,
+    `You label one bank transaction of a salaried person in India. Reply with JSON {"category": string, "confidence": 0 to 1${tags.length ? ', "tag": string (optional)' : ""}}. ${LABEL_RULES}${tags.length ? ` The person's own labels: ${JSON.stringify(tags)}. Add "tag" with one of them, copied exactly, only if it clearly fits this payment; otherwise leave it out.` : ""}`,
     `${t.direction} of Rs ${t.amount / 100} ${t.direction === "debit" ? "to" : "from"} "${t.payee}" on ${time}`, 300);
-  return validGuess(out) ? out : null;
+  if (!validGuess(out)) return null;
+  const tag = tags.find((x) => x.toLowerCase() === String(out.tag ?? "").trim().toLowerCase()); // only labels you already use
+  return { category: out.category, confidence: out.confidence, tag };
 }
 
 /** Statement import: many payees in one call. The result has the same length as the input; null where unsure. */
