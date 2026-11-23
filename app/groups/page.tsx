@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { DEBIT_OTHER, SPEND, istDay, rupees } from "@/lib/money";
 import { groupTxns } from "@/lib/ledger";
 import { CategorySelect } from "../category-select";
-import { editGroupPayment } from "./actions";
+import { editSplit } from "../actions";
+import { SplitEditor, splitContext } from "../split-editor";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +21,7 @@ export default async function Groups({ searchParams }: { searchParams: Promise<{
   ]);
   const name = new Map(people.map((p) => [p.id, p.name]));
   const groups = await Promise.all(circles.map(async (c) => ({ ...c, ids: JSON.parse(c.memberIds) as number[], items: await groupTxns(c.name) })));
-  const ids = groups.flatMap((g) => g.items.map((t) => t.id));
-  const lines = ids.length ? await db.select().from(schema.dues).where(inArray(schema.dues.txnId, ids)) : [];
-  const owed = (txn: number, person: number) => lines.filter((d) => d.txnId === txn && d.personId === person).reduce((a, d) => a + d.amount, 0);
+  const ctx = await splitContext(groups.flatMap((g) => g.items));
 
   return (
     <main className="page narrow">
@@ -41,25 +40,13 @@ export default async function Groups({ searchParams }: { searchParams: Promise<{
                 <div className="who"><span>{t.payee}</span><small className="muted">{istDay(t.at)} · your share {rupees(t.myShare ?? 0)}</small></div>
                 <CategorySelect id={t.id} value={t.category} options={[...SPEND, ...DEBIT_OTHER]} />
                 <span className="num amt">{rupees(t.amount)}</span>
-                <details style={{ gridColumn: "1 / -1" }}>
-                  <summary className="muted">Edit split</summary>
-                  <form action={editGroupPayment} style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "end", marginTop: 8 }}>
-                    <input type="hidden" name="group" value={g.id} /><input type="hidden" name="txn" value={t.id} />
-                    {[{ k: "me", label: "You", v: t.myShare ?? 0 }, ...g.ids.map((i) => ({ k: `p${i}`, label: name.get(i) ?? "?", v: owed(t.id, i) }))].map((f) => (
-                      <label key={f.k} className="muted" style={{ display: "grid", gap: 2, fontSize: 13 }}>{f.label}
-                        <input className="pill" style={{ width: "7em" }} name={f.k} type="number" min="0" step="0.01" defaultValue={f.v / 100} />
-                      </label>
-                    ))}
-                    <button className="btn" name="op" value="save">Save</button>
-                    <button className="btn ghost" name="op" value="remove">Remove from group</button>
-                  </form>
-                </details>
+                <SplitEditor t={t} ctx={ctx} back="/groups" />
               </li>
             ))}
           </ul>
           {recent.length ? (
-            <form action={editGroupPayment} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
-              <input type="hidden" name="group" value={g.id} />
+            <form action={editSplit} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+              <input type="hidden" name="target" value={`g:${g.id}`} /><input type="hidden" name="back" value="/groups" />
               <select name="txn" className="pill" style={{ maxWidth: "100%" }} aria-label="Add a payment" required defaultValue="">
                 <option value="" disabled>Add a payment, split equally…</option>
                 {recent.map((t) => <option key={t.id} value={t.id}>{istDay(t.at)} · {t.payee} · {rupees(t.amount)}</option>)}

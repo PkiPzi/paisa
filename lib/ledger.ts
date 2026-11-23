@@ -105,24 +105,25 @@ export async function balances(): Promise<{ id: number; name: string; amount: nu
 // ---------- splitting a payment ----------
 export type Plan = { label: string; myShare: number; dues: { personId: number; amount: number }[] };
 
-/** Equal shares with a target ("g:<circleId>" or "p:<personId>"), you included. Null when the target is gone. */
-export async function equalPlan(target: string, amount: number): Promise<Plan | null> {
+/** "g:<circleId>" or "p:<personId>" -> its people and display name. Null when it is gone. */
+export async function targetOf(target: string): Promise<{ ids: number[]; label: string } | null> {
   const db = getDb();
   const [kind, rawId] = target.split(":");
   const id = Number(rawId);
-  let ids: number[], label: string;
   if (kind === "g") {
     const [c] = await db.select().from(circles).where(eq(circles.id, id));
-    if (!c) return null;
-    [ids, label] = [JSON.parse(c.memberIds) as number[], c.name];
-  } else {
-    const [p] = await db.select().from(people).where(eq(people.id, id));
-    if (!p) return null;
-    [ids, label] = [[p.id], p.name];
+    return c ? { ids: JSON.parse(c.memberIds) as number[], label: c.name } : null;
   }
-  if (!ids.length) return null;
-  const [mine, ...theirs] = equalShares(amount, ids.length + 1);
-  return { label, myShare: mine, dues: ids.map((personId, i) => ({ personId, amount: theirs[i] })) };
+  const [p] = await db.select().from(people).where(eq(people.id, id));
+  return p ? { ids: [p.id], label: p.name } : null;
+}
+
+/** Equal shares with a target ("g:<circleId>" or "p:<personId>"), you included. Null when the target is gone. */
+export async function equalPlan(target: string, amount: number): Promise<Plan | null> {
+  const hit = await targetOf(target);
+  if (!hit?.ids.length) return null;
+  const [mine, ...theirs] = equalShares(amount, hit.ids.length + 1);
+  return { label: hit.label, myShare: mine, dues: hit.ids.map((personId, i) => ({ personId, amount: theirs[i] })) };
 }
 
 /** Records a split once, even on a double tap. Returns the updated payment, or null if it was already split. */

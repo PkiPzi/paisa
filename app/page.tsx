@@ -5,6 +5,7 @@ import { CREDIT, DEBIT_OTHER, SPEND, istDay, rupees, summarize } from "@/lib/mon
 import { balances } from "@/lib/ledger";
 import { logout } from "./login/actions";
 import { CategorySelect } from "./category-select";
+import { SplitEditor, splitContext } from "./split-editor";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ const short = (paise: number) => {
   return r >= 100000 ? `₹${(r / 100000).toFixed(1)}L` : r >= 1000 ? `₹${(r / 1000).toFixed(r >= 10000 ? 0 : 1)}k` : `₹${Math.round(r)}`;
 };
 
-export default async function Dashboard({ searchParams }: { searchParams: Promise<{ m?: string; f?: string }> }) {
+export default async function Dashboard({ searchParams }: { searchParams: Promise<{ m?: string; f?: string; err?: string }> }) {
   const sp = await searchParams;
   const today = istDay(new Date());
   const thisMonth = today.slice(0, 7);
@@ -64,6 +65,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const youOwe = owed.filter((b) => b.amount < 0);
   const list = sp.f === "todo" ? rows.filter((t) => !t.category) : rows;
   const byDay = Map.groupBy(list, (t) => istDay(t.at));
+  const ctx = await splitContext(list);
   const qs = (f?: string) => `/?m=${m}${f ? `&f=${f}` : ""}`;
 
   return (
@@ -151,6 +153,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </div>
       </section>
 
+      {sp.err ? <p className="nudge static">{sp.err}</p> : null}
       <section className="card">
         <div className="listhead">
           <h2>{sp.f === "todo" ? "Needs a label" : "Transactions"}</h2>
@@ -172,6 +175,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
                   </div>
                   <CategorySelect id={t.id} value={t.category} options={t.direction === "debit" ? [...SPEND, ...DEBIT_OTHER] : [...CREDIT]} />
                   <span className={`num amt${t.direction === "credit" ? " in" : ""}`}>{t.direction === "credit" ? "+" : ""}{rupees(t.amount)}</span>
+                  <SplitEditor t={t} ctx={ctx} back={qs(sp.f)} />
                 </li>
               ))}
             </ul>
