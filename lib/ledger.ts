@@ -170,3 +170,16 @@ export async function addDue(personName: string, amount: number, note: string) {
   await getDb().insert(dues).values({ personId: p.id, amount, note, at: new Date() });
   return p;
 }
+
+/** Payments split with the named group, newest first. */
+export const groupTxns = (name: string) => getDb().select().from(txns).where(eq(txns.splitWith, name)).orderBy(desc(txns.at));
+
+/** Replaces a payment's split with exact shares in paise. Returns an error text, or null once saved. */
+export async function resplit(t: Txn, label: string, mine: number, theirs: { personId: number; amount: number }[]): Promise<string | null> {
+  const all = [mine, ...theirs.map((d) => d.amount)];
+  if (all.some((a) => !Number.isInteger(a) || a < 0)) return "Shares must be zero or more.";
+  const sum = all.reduce((a, b) => a + b, 0);
+  if (sum !== t.amount) return `Shares add up to ${(sum / 100).toFixed(2)}, but the payment is ${(t.amount / 100).toFixed(2)}.`;
+  await postSplit(await undoSplit(t), { label, myShare: mine, dues: theirs }); // no transactions on Neon HTTP: undo, then post
+  return null;
+}

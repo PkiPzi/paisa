@@ -26,6 +26,21 @@ describe("parseCommand", () => {
   });
 });
 
+describe("resplit", () => {
+  it("replaces a split with exact shares and rejects shares that do not add up", async () => {
+    await L.saveCircle("Trip", ["Mira"]);
+    const [g] = (await L.splitTargets()).circles.filter((c) => c.name === "Trip");
+    const t = await pay(100000, "debit", "cafe");
+    await L.postSplit(t, (await L.equalPlan(`g:${g.id}`, t.amount))!);
+    const mira = await L.findOrCreatePerson("Mira");
+    expect(await L.resplit(t, "Trip", 20000, [{ personId: mira.id, amount: 70000 }])).toMatch(/add up/);
+    expect(await net("Mira")).toBe(50000);
+    expect(await L.resplit(t, "Trip", 20000, [{ personId: mira.id, amount: 80000 }])).toBeNull();
+    expect(await net("Mira")).toBe(80000);
+    expect((await L.groupTxns("Trip")).map((x) => x.myShare)).toEqual([20000]);
+  });
+});
+
 describe("ledger", () => {
   it("splits once, undoes cleanly, and settles in both directions", async () => {
     await L.saveCircle("Flat", ["Aman", "Riya"]);
